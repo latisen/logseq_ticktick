@@ -25,13 +25,24 @@ function statusFromContent(content?: string): string | null {
   return match?.[1]?.toUpperCase() || null
 }
 
+function statusFromProperties(block: BlockEntity): string | null {
+  const value = block.properties?.status ?? block.properties?.Status
+  if (typeof value === 'string') return value.toUpperCase()
+  if (value && typeof value === 'object' && 'name' in value && typeof value.name === 'string') {
+    return value.name.toUpperCase()
+  }
+  return null
+}
+
 function isTaskBlock(block: BlockEntity): boolean {
-  const status = block.marker || statusFromContent(block.content)
+  const status = block.marker || statusFromProperties(block) || statusFromContent(block.content)
   return !!status && TASK_MARKERS.has(status.toUpperCase())
 }
 
 function isBlockDone(block: BlockEntity): boolean {
-  return isDoneMarker(block.marker) || isDoneMarker(statusFromContent(block.content))
+  return isDoneMarker(block.marker) ||
+    isDoneMarker(statusFromProperties(block)) ||
+    isDoneMarker(statusFromContent(block.content))
 }
 
 function titleFromContent(content: string, marker?: string | null): string {
@@ -61,6 +72,10 @@ async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
 
 async function markBlockDone(block: BlockEntity): Promise<void> {
   const content = block.content || ''
+  if (statusFromProperties(block)) {
+    await logseq.Editor.upsertBlockProperty(block.uuid, 'status', 'Done')
+    return
+  }
   if (!block.marker && statusFromContent(content)) {
     await logseq.Editor.updateBlock(block.uuid, content.replace(/Status::\s*\w+\s*$/i, 'Status:: Done'))
     return
