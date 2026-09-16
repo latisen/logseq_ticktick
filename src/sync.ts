@@ -138,7 +138,13 @@ async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
 async function markBlockDone(block: BlockEntity): Promise<void> {
   const content = blockText(block)
   if (await logseq.App.checkCurrentIsDbGraph()) {
-    await logseq.Editor.upsertBlockProperty(block.uuid, 'status', 'Done')
+    // DB graphs require the qualified built-in status property, not a user "status" property.
+    await logseq.Editor.removeBlockProperty(block.uuid, 'status')
+    await logseq.Editor.upsertBlockProperty(
+      block.uuid,
+      'logseq.property/status',
+      'logseq.property/status.done',
+    )
     return
   }
   if (statusFromProperties(block)) {
