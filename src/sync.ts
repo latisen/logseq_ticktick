@@ -32,6 +32,7 @@ const SYNC_STORAGE_KEY = 'sync-mappings-v1'
 const LEGACY_ID_PROPERTY = 'ticktick-id'
 const LEGACY_PROJECT_PROPERTY = 'ticktick-project'
 const LEGACY_TITLE_PROPERTY = 'ticktick-title'
+let doneStatusId: number | null = null
 
 function getStorage() {
   return logseq.Assets.makeSandboxStorage()
@@ -138,12 +139,21 @@ async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
 async function markBlockDone(block: BlockEntity): Promise<void> {
   const content = blockText(block)
   if (await logseq.App.checkCurrentIsDbGraph()) {
-    // DB graphs require the qualified built-in status property, not a user "status" property.
-    await logseq.Editor.removeBlockProperty(block.uuid, 'status')
+    if (doneStatusId === null) {
+      doneStatusId = await syncStep('Logseq could not find its built-in Done status', () =>
+        logseq.DB.datascriptQuery<number>(`
+          [:find ?status .
+           :where
+           [?status :db/ident :logseq.property/status.done]]
+        `))
+    }
+    if (!doneStatusId) {
+      throw new Error('Logseq could not find its built-in Done status value.')
+    }
     await logseq.Editor.upsertBlockProperty(
       block.uuid,
-      'logseq.property/status',
-      'logseq.property/status.done',
+      ':logseq.property/status',
+      doneStatusId,
     )
     return
   }
