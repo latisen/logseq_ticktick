@@ -301,16 +301,22 @@ export async function runSync(): Promise<SyncResult> {
     }
 
     if (!remote) {
-      if (storedStatus !== 2 && localStatus !== 2) {
-        try {
-          const task = await ticktick.getTask(projectId, taskId)
-          if (task.status === 2) {
-            await syncStep(`Logseq could not mark task "${taskLabel(block)}" as done`, () => markBlockDone(block))
-            record.status = 2
-          }
-        } catch (e) {
-          console.warn(`[ticktick-sync] Could not load TickTick task ${taskId}:`, e)
+      // TickTick does not return Inbox in its project listing. Verify mapped
+      // tasks directly so Inbox tasks can still sync in both directions.
+      try {
+        const task = await syncStep(`TickTick could not load task "${taskLabel(block)}"`, () =>
+          ticktick.getTask(projectId, taskId))
+        if (localStatus === 2 && task.status !== 2) {
+          await syncStep(`TickTick could not complete task "${taskLabel(block)}"`, () =>
+            ticktick.completeTask(projectId, taskId))
+          record.status = 2
+          completedInTickTick += 1
+        } else if (task.status === 2 && localStatus !== 2) {
+          await syncStep(`Logseq could not mark task "${taskLabel(block)}" as done`, () => markBlockDone(block))
+          record.status = 2
         }
+      } catch (error) {
+        console.warn(`[ticktick-sync] Could not load TickTick task ${taskId}:`, error)
       }
       continue
     }
