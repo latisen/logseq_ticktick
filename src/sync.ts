@@ -325,7 +325,9 @@ export async function runSync(): Promise<SyncResult> {
       record.title = remote.title
     }
 
-    if (localStatus === 2 && storedStatus !== 2) {
+    // The stored status is only cache data. TickTick's active-task list is the
+    // authority: an active remote task must be completed when Logseq says Done.
+    if (localStatus === 2) {
       await syncStep(`TickTick could not complete task "${taskLabel(block)}"`, () =>
         ticktick.completeTask(projectId, taskId))
       record.status = 2
