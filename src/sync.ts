@@ -25,13 +25,22 @@ function statusFromContent(content?: string): string | null {
   return match?.[1]?.toUpperCase() || null
 }
 
-function statusFromProperties(block: BlockEntity): string | null {
-  const value = block.properties?.status ?? block.properties?.Status
-  if (typeof value === 'string') return value.toUpperCase()
-  if (value && typeof value === 'object' && 'name' in value && typeof value.name === 'string') {
-    return value.name.toUpperCase()
+function normalizeStatus(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const parts = value.split('.')
+    return (parts[parts.length - 1] || '').toUpperCase() || null
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return normalizeStatus(record.ident ?? record['db/ident'] ?? record.name)
   }
   return null
+}
+
+function statusFromProperties(block: BlockEntity): string | null {
+  const value = block.properties?.status ?? block.properties?.Status ??
+    block['logseq.property/status'] ?? block['logseq.task/status']
+  return normalizeStatus(value)
 }
 
 function isTaskBlock(block: BlockEntity): boolean {
@@ -54,6 +63,7 @@ function titleFromContent(content: string, marker?: string | null): string {
 }
 
 function contentWithTitle(block: BlockEntity, title: string): string {
+  if (block.title && !block.content) return title
   const content = block.content || ''
   const firstLine = content.split('\n')[0]
   const rest = content.slice(firstLine.length)
@@ -61,19 +71,28 @@ function contentWithTitle(block: BlockEntity, title: string): string {
   return block.marker ? `${block.marker} ${title}${rest}` : `${title}${statusProperty}${rest}`
 }
 
+function blockText(block: BlockEntity): string {
+  return block.title || block.content || ''
+}
+
 async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
-  const result = await logseq.DB.datascriptQuery<Array<[BlockEntity]>>(`
-    [:find (pull ?block [*])
-     :where
-     [?block :block/content ?content]]
-  `)
-  return result.map(([block]) => block).filter(isTaskBlock)
+  const isDbGraph = await logseq.App.checkCurrentIsDbGraph()
+  const query = isDbGraph
+    ? `[:find (pull ?block [*])
+        :where
+        [?block :block/tags ?tag]
+        [?tag :db/ident :logseq.class/Task]]`
+    : `[:find (pull ?block [*])
+        :where
+        [?block :block/content ?content]]`
+  const result = await logseq.DB.datascriptQuery<Array<[BlockEntity]>>(query)
+  return isDbGraph ? result.map(([block]) => block) : result.map(([block]) => block).filter(isTaskBlock)
 }
 
 async function markBlockDone(block: BlockEntity): Promise<void> {
   const content = block.content || ''
   if (statusFromProperties(block)) {
-    await logseq.Editor.upsertBlockProperty(block.uuid, 'status', 'Done')
+    await logseq.Editor.upsertBlockProperty(block.uuid, 'status', 'logseq.property/status.done')
     return
   }
   if (!block.marker && statusFromContent(content)) {
@@ -121,7 +140,7 @@ export async function runSync(): Promise<number> {
   // New vault tasks are created in the configured default project or TickTick Inbox.
   for (const block of localBlocks) {
     if (await logseq.Editor.getBlockProperty(block.uuid, PROP_ID)) continue
-    const title = titleFromContent(block.content || '', block.marker)
+    const title = titleFromContent(blockText(block), block.marker)
     if (!title) continue
 
     const task = await ticktick.createTask({
@@ -140,7 +159,7 @@ export async function runSync(): Promise<number> {
     const projectId = String((await logseq.Editor.getBlockProperty(block.uuid, PROP_PROJECT)) || '')
     if (!projectId) continue
 
-    const localTitle = titleFromContent(block.content || '', block.marker)
+    const localTitle = titleFromContent(blockText(block), block.marker)
     const storedTitle = String((await logseq.Editor.getBlockProperty(block.uuid, PROP_TITLE)) || '')
     const storedStatus = Number((await logseq.Editor.getBlockProperty(block.uuid, PROP_STATUS)) ?? 0)
     const localStatus = isBlockDone(block) ? 2 : 0
