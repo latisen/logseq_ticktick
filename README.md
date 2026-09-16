@@ -39,8 +39,9 @@ Then in Logseq: enable **Developer mode** in settings, open the plugins dashboar
 ### 3. Configure
 
 1. Open the plugin's settings and paste the API key into **API key**.
-2. Run **"TickTick: List projects"** to see your TickTick project IDs, then paste the one you want to
-   sync into the **TickTick project (list) ID** setting.
+2. Run **"TickTick: List projects"** to see your TickTick project IDs. Paste one into the
+   **TickTick project (list) ID** setting to sync that list, or leave it empty to create new Logseq
+   tasks in TickTick Inbox.
 3. (Optional) change the **Logseq sync page** setting (defaults to the page `ticktick`).
 
 Add tasks as top-level blocks on that page in Logseq, or in the chosen list in TickTick, and they'll
@@ -48,7 +49,7 @@ sync automatically.
 
 ## Security note
 
-Tokens and secrets are stored in the plugin's settings (`.logseq/plugin-settings` in your graph),
+The API key is stored in the plugin's settings (`.logseq/plugin-settings` in your graph),
 which is local to your machine but not encrypted. Treat it like any other local config file.
 
 ## Development

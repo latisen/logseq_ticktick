@@ -45,8 +45,8 @@ async function ensureSyncPageExists(pageName: string): Promise<void> {
 
 export async function runSync(): Promise<void> {
   const settings = getSettings()
-  if (!settings.apiKey || !settings.projectId) {
-    console.warn('[ticktick-sync] Skipping sync: not connected or no project configured.')
+  if (!settings.apiKey) {
+    console.warn('[ticktick-sync] Skipping sync: no API key configured.')
     return
   }
 
@@ -60,8 +60,9 @@ export async function runSync(): Promise<void> {
     if (ttId) localByTtId.set(String(ttId), block)
   }
 
-  const projectData = await ticktick.getProjectData(settings.projectId)
-  const remoteOpenTasks = projectData.tasks || []
+  const remoteOpenTasks = settings.projectId
+    ? (await ticktick.getProjectData(settings.projectId)).tasks || []
+    : []
   const remoteById = new Map(remoteOpenTasks.map((t) => [t.id, t]))
 
   // 1) New local tasks -> create in TickTick.
@@ -73,12 +74,15 @@ export async function runSync(): Promise<void> {
     if (!title) continue
 
     const done = isDoneMarker(block.marker)
-    const created = await ticktick.createTask({ title, projectId: settings.projectId })
+    const created = await ticktick.createTask({
+      title,
+      ...(settings.projectId ? { projectId: settings.projectId } : {}),
+    })
     await logseq.Editor.upsertBlockProperty(block.uuid, PROP_ID, created.id)
-    await logseq.Editor.upsertBlockProperty(block.uuid, PROP_PROJECT, settings.projectId)
+    await logseq.Editor.upsertBlockProperty(block.uuid, PROP_PROJECT, created.projectId)
     await logseq.Editor.upsertBlockProperty(block.uuid, PROP_STATUS, done ? 2 : 0)
     if (done) {
-      await ticktick.completeTask(settings.projectId, created.id)
+      await ticktick.completeTask(created.projectId, created.id)
     }
     localByTtId.set(created.id, block)
   }
@@ -89,7 +93,9 @@ export async function runSync(): Promise<void> {
     if (storedStatus === 2) continue
     if (!isDoneMarker(block.marker)) continue
 
-    await ticktick.completeTask(settings.projectId, ttId)
+    const projectId = String((await logseq.Editor.getBlockProperty(block.uuid, PROP_PROJECT)) || settings.projectId)
+    if (!projectId) continue
+    await ticktick.completeTask(projectId, ttId)
     await logseq.Editor.upsertBlockProperty(block.uuid, PROP_STATUS, 2)
   }
 

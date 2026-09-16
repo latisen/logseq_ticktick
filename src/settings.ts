@@ -29,7 +29,7 @@ export const settingsSchema: SettingSchemaDesc[] = [
     type: 'string',
     title: 'TickTick project (list) ID',
     description:
-      'Run "TickTick: List projects" from the command palette to see IDs, then paste the one to sync with here.',
+      'Run "TickTick: List projects" from the command palette to see IDs. Leave empty to create new tasks in Inbox.',
     default: '',
   },
   {
