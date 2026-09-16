@@ -137,6 +137,10 @@ async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
 
 async function markBlockDone(block: BlockEntity): Promise<void> {
   const content = blockText(block)
+  if (await logseq.App.checkCurrentIsDbGraph()) {
+    await logseq.Editor.upsertBlockProperty(block.uuid, 'status', 'Done')
+    return
+  }
   if (statusFromProperties(block)) {
     await logseq.Editor.upsertBlockProperty(block.uuid, 'status', 'logseq.property/status.done')
     return
@@ -155,7 +159,7 @@ async function markBlockDone(block: BlockEntity): Promise<void> {
 
 async function repairLegacyDonePrefix(block: BlockEntity): Promise<boolean> {
   const text = blockText(block)
-  const repaired = text.replace(/^DONE\s+(.+?\s+Status::\s*)Todo\s*$/i, '$1Done')
+  const repaired = text.replace(/^DONE\s+(.+?\s+Status::\s*)(?:Todo|Doing|Now|Later|Done|Canceled|Cancelled)\s*$/i, '$1Done')
   if (repaired === text) return false
   await logseq.Editor.updateBlock(block.uuid, repaired)
   return true
