@@ -34,8 +34,16 @@ function getStorage() {
 }
 
 async function loadSyncRecords(): Promise<Record<string, SyncRecord>> {
-  const value = await syncStep('Logseq could not read TickTick sync mappings', () =>
-    getStorage().getItem(SYNC_STORAGE_KEY))
+  let value: string | undefined
+  try {
+    value = await getStorage().getItem(SYNC_STORAGE_KEY)
+  } catch (error) {
+    if (error instanceof Error && error.message.toLowerCase().includes('file not existed')) {
+      return {}
+    }
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`Logseq could not read TickTick sync mappings. Underlying error: ${detail}`)
+  }
   if (!value || typeof value !== 'string') return {}
   try {
     return JSON.parse(value) as Record<string, SyncRecord>
