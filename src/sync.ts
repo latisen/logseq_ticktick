@@ -220,7 +220,10 @@ export async function runSync(): Promise<SyncResult> {
   const settings = getSettings()
   if (!settings.apiKey) {
     console.warn('[ticktick-sync] Skipping sync: no API key configured.')
-    return { localTaskCount: 0, createdInTickTick: 0, importedFromTickTick: 0, migratedMappings: 0, completedInTickTick: 0 }
+    return {
+      localTaskCount: 0, createdInTickTick: 0, importedFromTickTick: 0, migratedMappings: 0,
+      completedInTickTick: 0, completedInLogseq: 0, completionCandidates: 0, alreadyCompleted: 0,
+    }
   }
 
   const importPage = settings.targetPage || 'ticktick'
@@ -236,6 +239,8 @@ export async function runSync(): Promise<SyncResult> {
   let importedFromTickTick = 0
   let migratedMappings = 0
   let completedInTickTick = 0
+  let completionCandidates = 0
+  let alreadyCompleted = 0
 
   for (const block of localBlocks) {
     await syncStep(`Logseq could not repair status for task "${taskLabel(block)}"`, () => repairLegacyDonePrefix(block))
@@ -290,6 +295,11 @@ export async function runSync(): Promise<SyncResult> {
     const localStatus = isBlockCompleted(block, completedDbTaskUuids) ? 2 : 0
     const remote = remoteById.get(taskId)
 
+    if (localStatus === 2) {
+      completionCandidates += 1
+      if (storedStatus === 2) alreadyCompleted += 1
+    }
+
     if (!remote) {
       if (storedStatus !== 2 && localStatus !== 2) {
         try {
@@ -335,5 +345,14 @@ export async function runSync(): Promise<SyncResult> {
   }
 
   await saveSyncRecords(syncRecords)
-  return { localTaskCount: localBlocks.length, createdInTickTick, importedFromTickTick, migratedMappings, completedInTickTick }
+  return {
+    localTaskCount: localBlocks.length,
+    createdInTickTick,
+    importedFromTickTick,
+    migratedMappings,
+    completedInTickTick,
+    completedInLogseq: completedDbTaskUuids.size,
+    completionCandidates,
+    alreadyCompleted,
+  }
 }

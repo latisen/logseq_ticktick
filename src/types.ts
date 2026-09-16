@@ -40,4 +40,7 @@ export interface SyncResult {
   importedFromTickTick: number
   migratedMappings: number
   completedInTickTick: number
+  completedInLogseq: number
+  completionCandidates: number
+  alreadyCompleted: number
 }
