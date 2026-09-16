@@ -113,11 +113,19 @@ async function getRemoteTasks(): Promise<Map<string, TickTickTask>> {
   return new Map(projectData.flatMap((project) => project.tasks || []).map((task) => [task.id, task]))
 }
 
-async function setSyncState(blockUuid: string, task: TickTickTask, status: number): Promise<void> {
-  await logseq.Editor.upsertBlockProperty(blockUuid, PROP_ID, task.id)
-  await logseq.Editor.upsertBlockProperty(blockUuid, PROP_PROJECT, task.projectId)
-  await logseq.Editor.upsertBlockProperty(blockUuid, PROP_TITLE, task.title)
-  await logseq.Editor.upsertBlockProperty(blockUuid, PROP_STATUS, status)
+function syncProperties(task: TickTickTask, status: number) {
+  return {
+    [PROP_ID]: task.id,
+    [PROP_PROJECT]: task.projectId,
+    [PROP_TITLE]: task.title,
+    [PROP_STATUS]: status,
+  }
+}
+
+async function setSyncState(block: BlockEntity, task: TickTickTask, status: number): Promise<void> {
+  await logseq.Editor.updateBlock(block.uuid, block.content || block.title, {
+    properties: syncProperties(task, status),
+  })
 }
 
 export async function runSync(): Promise<number> {
@@ -149,7 +157,7 @@ export async function runSync(): Promise<number> {
     })
     const done = isBlockDone(block)
     if (done) await ticktick.completeTask(task.projectId, task.id)
-    await setSyncState(block.uuid, task, done ? 2 : 0)
+    await setSyncState(block, task, done ? 2 : 0)
     localByTaskId.set(task.id, block)
   }
 
@@ -197,8 +205,9 @@ export async function runSync(): Promise<number> {
   // New TickTick tasks cannot retain a Logseq location, so they are appended to one import page.
   for (const task of remoteById.values()) {
     if (localByTaskId.has(task.id)) continue
-    const block = await logseq.Editor.appendBlockInPage(importPage, `TODO ${task.title}`)
-    if (block) await setSyncState(block.uuid, task, task.status === 2 ? 2 : 0)
+    await logseq.Editor.appendBlockInPage(importPage, `TODO ${task.title}`, {
+      properties: syncProperties(task, task.status === 2 ? 2 : 0),
+    })
   }
 
   return localBlocks.length
