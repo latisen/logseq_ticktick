@@ -17,7 +17,10 @@ async function safeSync(reason: string) {
   syncing = true
   try {
     console.log(`[ticktick-sync] running sync (${reason})`)
-    await runSync()
+    const localTaskCount = await runSync()
+    if (reason === 'manual command' || reason === 'toolbar click') {
+      await logseq.UI.showMsg(`TickTick sync completed. Found ${localTaskCount} Logseq task block(s).`, 'success')
+    }
   } catch (e) {
     console.error('[ticktick-sync] sync failed:', e)
     await logseq.UI.showMsg(`TickTick sync failed: ${(e as Error).message}`, 'error')

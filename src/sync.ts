@@ -68,11 +68,11 @@ async function setSyncState(blockUuid: string, task: TickTickTask, status: numbe
   await logseq.Editor.upsertBlockProperty(blockUuid, PROP_STATUS, status)
 }
 
-export async function runSync(): Promise<void> {
+export async function runSync(): Promise<number> {
   const settings = getSettings()
   if (!settings.apiKey) {
     console.warn('[ticktick-sync] Skipping sync: no API key configured.')
-    return
+    return 0
   }
 
   const importPage = settings.targetPage || 'ticktick'
@@ -148,4 +148,6 @@ export async function runSync(): Promise<void> {
     const block = await logseq.Editor.appendBlockInPage(importPage, `TODO ${task.title}`)
     if (block) await setSyncState(block.uuid, task, task.status === 2 ? 2 : 0)
   }
+
+  return localBlocks.length
 }
