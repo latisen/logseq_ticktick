@@ -24,6 +24,8 @@ async function safeSync(reason: string) {
           `created ${result.createdInTickTick} in TickTick; imported ${result.importedFromTickTick}; ` +
           `completed ${result.completedInTickTick} in TickTick; Logseq reports ${result.completedInLogseq} done ` +
           `(${result.completionCandidates} mapped, ${result.alreadyCompleted} already synced); ` +
+          `moved ${result.movedListInTickTick} list(s) in TickTick, ${result.movedListInLogseq} in Logseq; ` +
+          `due dates updated: ${result.dueDateUpdatedInTickTick} in TickTick, ${result.dueDateUpdatedInLogseq} in Logseq; ` +
           `migrated ${result.migratedMappings} older link(s).`,
         'success',
         { timeout: 10000 },

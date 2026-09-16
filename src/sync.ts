@@ -198,21 +198,69 @@ async function repairLegacyDonePrefix(block: BlockEntity): Promise<boolean> {
   return true
 }
 
-async function getRemoteTasks(): Promise<Map<string, TickTickTask>> {
+// Due dates are only synced on DB graphs, which expose a built-in timestamp property.
+const DEADLINE_PROPERTY = ':logseq.property/deadline'
+const LIST_PROPERTY = 'ticktick-list'
+
+function msToIsoDueDate(ms: number): string {
+  return new Date(ms).toISOString()
+}
+
+function isoDueDateToMs(iso?: string | null): number | null {
+  if (!iso) return null
+  const parsed = Date.parse(iso)
+  return Number.isNaN(parsed) ? null : parsed
+}
+
+function getLocalDeadlineMs(block: BlockEntity): number | null {
+  const raw = block[DEADLINE_PROPERTY] ?? block['logseq.property/deadline'] ?? block.properties?.deadline
+  if (raw === null || raw === undefined) return null
+  const value = raw instanceof Date ? raw.getTime() : Number(raw)
+  return Number.isNaN(value) ? null : value
+}
+
+async function setLocalDeadline(block: BlockEntity, ms: number | null): Promise<void> {
+  if (ms === null) {
+    await logseq.Editor.removeBlockProperty(block.uuid, DEADLINE_PROPERTY)
+  } else {
+    await logseq.Editor.upsertBlockProperty(block.uuid, DEADLINE_PROPERTY, ms)
+  }
+}
+
+function getLocalListName(block: BlockEntity): string | null {
+  const raw = block.properties?.[LIST_PROPERTY] ?? block[LIST_PROPERTY]
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null
+}
+
+async function setLocalListName(block: BlockEntity, name: string): Promise<void> {
+  if (!name) return
+  await logseq.Editor.upsertBlockProperty(block.uuid, LIST_PROPERTY, name)
+}
+
+interface RemoteData {
+  tasksById: Map<string, TickTickTask>
+  projectsById: Map<string, { id: string; name: string }>
+}
+
+async function getRemoteData(): Promise<RemoteData> {
   const projects = await syncStep('TickTick could not list projects', () => ticktick.listProjects())
   const projectData = await Promise.all(projects.map((project) => syncStep(
     `TickTick could not read project "${project.name}" (${project.id})`,
     () => ticktick.getProjectData(project.id),
   )))
-  return new Map(projectData.flatMap((project) => project.tasks || []).map((task) => [task.id, task]))
+  const tasksById = new Map(projectData.flatMap((project) => project.tasks || []).map((task) => [task.id, task]))
+  const projectsById = new Map(projects.map((project) => [project.id, project]))
+  return { tasksById, projectsById }
 }
 
-function syncRecord(task: TickTickTask, status: number): SyncRecord {
+function syncRecord(task: TickTickTask, status: number, projectName: string): SyncRecord {
   return {
     taskId: task.id,
     projectId: task.projectId,
+    projectName,
     title: task.title,
     status,
+    dueDate: isoDueDateToMs(task.dueDate ?? null),
   }
 }
 
@@ -223,16 +271,18 @@ export async function runSync(): Promise<SyncResult> {
     return {
       localTaskCount: 0, createdInTickTick: 0, importedFromTickTick: 0, migratedMappings: 0,
       completedInTickTick: 0, completedInLogseq: 0, completionCandidates: 0, alreadyCompleted: 0,
+      movedListInTickTick: 0, movedListInLogseq: 0, dueDateUpdatedInTickTick: 0, dueDateUpdatedInLogseq: 0,
     }
   }
 
+  const isDbGraph = await logseq.App.checkCurrentIsDbGraph()
   const importPage = settings.targetPage || 'ticktick'
   const localBlocks = await syncStep('Logseq could not query task blocks in this graph', getAllLocalTaskBlocks)
   const completedDbTaskUuids = await syncStep(
     'Logseq could not query completed task statuses',
     getCompletedDbTaskUuids,
   )
-  const remoteById = await getRemoteTasks()
+  const { tasksById: remoteById, projectsById } = await getRemoteData()
   const syncRecords = await loadSyncRecords()
   const localByTaskId = new Map<string, BlockEntity>()
   let createdInTickTick = 0
@@ -241,6 +291,10 @@ export async function runSync(): Promise<SyncResult> {
   let completedInTickTick = 0
   let completionCandidates = 0
   let alreadyCompleted = 0
+  let movedListInTickTick = 0
+  let movedListInLogseq = 0
+  let dueDateUpdatedInTickTick = 0
+  let dueDateUpdatedInLogseq = 0
 
   for (const block of localBlocks) {
     await syncStep(`Logseq could not repair status for task "${taskLabel(block)}"`, () => repairLegacyDonePrefix(block))
@@ -248,13 +302,15 @@ export async function runSync(): Promise<SyncResult> {
     if (!record) {
       const legacyTaskId = await logseq.Editor.getBlockProperty(block.uuid, LEGACY_ID_PROPERTY)
       if (legacyTaskId) {
-        const projectId = await logseq.Editor.getBlockProperty(block.uuid, LEGACY_PROJECT_PROPERTY)
+        const projectId = String((await logseq.Editor.getBlockProperty(block.uuid, LEGACY_PROJECT_PROPERTY)) || '')
         const title = await logseq.Editor.getBlockProperty(block.uuid, LEGACY_TITLE_PROPERTY)
         record = {
           taskId: String(legacyTaskId),
-          projectId: String(projectId || ''),
+          projectId,
+          projectName: projectsById.get(projectId)?.name || '',
           title: String(title || titleFromContent(blockText(block), block.marker)),
           status: isBlockCompleted(block, completedDbTaskUuids) ? 2 : 0,
+          dueDate: isDbGraph ? getLocalDeadlineMs(block) : null,
         }
         syncRecords[block.uuid] = record
         migratedMappings += 1
@@ -263,30 +319,47 @@ export async function runSync(): Promise<SyncResult> {
     if (record) localByTaskId.set(record.taskId, block)
   }
 
-  // New vault tasks are created in the configured default project or TickTick Inbox.
+  // New vault tasks are created in the configured default project or TickTick Inbox,
+  // unless the block already names a target list via the "ticktick-list" property.
   for (const block of localBlocks) {
     if (syncRecords[block.uuid]) continue
     const title = titleFromContent(blockText(block), block.marker)
     if (!title) continue
 
+    const desiredListName = getLocalListName(block)
+    const desiredProject = desiredListName
+      ? [...projectsById.values()].find((p) => p.name.toLowerCase() === desiredListName.toLowerCase())
+      : undefined
+    const projectId = desiredProject?.id || settings.projectId
+    const localDueMs = isDbGraph ? getLocalDeadlineMs(block) : null
+
     const task = await syncStep(
       `TickTick could not create task "${title}"`,
-      () => ticktick.createTask({ title, ...(settings.projectId ? { projectId: settings.projectId } : {}) }),
+      () => ticktick.createTask({
+        title,
+        ...(projectId ? { projectId } : {}),
+        ...(localDueMs !== null ? { dueDate: msToIsoDueDate(localDueMs), isAllDay: false } : {}),
+      }),
     )
     const done = isBlockCompleted(block, completedDbTaskUuids)
     if (done) await syncStep(`TickTick could not complete newly created task "${title}"`, () =>
       ticktick.completeTask(task.projectId, task.id))
-    syncRecords[block.uuid] = syncRecord(task, done ? 2 : 0)
+
+    const projectName = projectsById.get(task.projectId)?.name || desiredListName || ''
+    if (projectName) await syncStep(`Logseq could not save the list name for task "${title}"`, () =>
+      setLocalListName(block, projectName))
+
+    syncRecords[block.uuid] = syncRecord(task, done ? 2 : 0, projectName)
     createdInTickTick += 1
     localByTaskId.set(task.id, block)
   }
 
-  // Existing mappings carry title and completion changes in either direction.
+  // Existing mappings carry title, list, due date, and completion changes in either direction.
   // A simultaneous title conflict resolves to the Logseq version.
   for (const [taskId, block] of localByTaskId) {
     const record = syncRecords[block.uuid]
     if (!record) continue
-    const projectId = record.projectId
+    let projectId = record.projectId
     if (!projectId) continue
 
     const localTitle = titleFromContent(blockText(block), block.marker)
@@ -321,6 +394,29 @@ export async function runSync(): Promise<SyncResult> {
       continue
     }
 
+    // Moving a task between TickTick lists: edit the "ticktick-list" property in Logseq,
+    // or move the task in TickTick directly. Whichever changed since the last sync wins.
+    const desiredListName = getLocalListName(block)
+    const remoteProjectName = projectsById.get(remote.projectId)?.name || ''
+    if (desiredListName && desiredListName.toLowerCase() !== (record.projectName || '').toLowerCase()) {
+      const targetProject = [...projectsById.values()].find((p) => p.name.toLowerCase() === desiredListName.toLowerCase())
+      if (targetProject && targetProject.id !== record.projectId) {
+        await syncStep(`TickTick could not move task "${taskLabel(block)}" to list "${desiredListName}"`, () =>
+          ticktick.updateTask(taskId, { projectId: targetProject.id }))
+        record.projectId = targetProject.id
+        record.projectName = targetProject.name
+        projectId = targetProject.id
+        movedListInTickTick += 1
+      }
+    } else if (remote.projectId !== record.projectId) {
+      record.projectId = remote.projectId
+      record.projectName = remoteProjectName
+      projectId = remote.projectId
+      await syncStep(`Logseq could not update the list for task "${taskLabel(block)}"`, () =>
+        setLocalListName(block, remoteProjectName))
+      movedListInLogseq += 1
+    }
+
     if (localTitle !== storedTitle && localTitle !== remote.title) {
       await syncStep(`TickTick could not update title for task "${localTitle}"`, () =>
         ticktick.updateTask(taskId, { title: localTitle, projectId }))
@@ -329,6 +425,26 @@ export async function runSync(): Promise<SyncResult> {
       await syncStep(`Logseq could not update title for task "${taskLabel(block)}"`, () =>
         logseq.Editor.updateBlock(block.uuid, contentWithTitle(block, remote.title)))
       record.title = remote.title
+    }
+
+    // Due dates: only pushed to TickTick when set locally (clearing a remote due
+    // date isn't supported yet). Remote due date changes, including clearing, sync back.
+    if (isDbGraph) {
+      const localDueMs = getLocalDeadlineMs(block)
+      const storedDueMs = record.dueDate
+      const remoteDueMs = isoDueDateToMs(remote.dueDate ?? null)
+
+      if (localDueMs !== null && localDueMs !== storedDueMs && localDueMs !== remoteDueMs) {
+        await syncStep(`TickTick could not update the due date for task "${taskLabel(block)}"`, () =>
+          ticktick.updateTask(taskId, { dueDate: msToIsoDueDate(localDueMs), isAllDay: false, projectId }))
+        record.dueDate = localDueMs
+        dueDateUpdatedInTickTick += 1
+      } else if (remoteDueMs !== storedDueMs && remoteDueMs !== localDueMs) {
+        await syncStep(`Logseq could not update the due date for task "${taskLabel(block)}"`, () =>
+          setLocalDeadline(block, remoteDueMs))
+        record.dueDate = remoteDueMs
+        dueDateUpdatedInLogseq += 1
+      }
     }
 
     // The stored status is only cache data. TickTick's active-task list is the
@@ -347,7 +463,11 @@ export async function runSync(): Promise<SyncResult> {
     const block = await syncStep(`Logseq could not import TickTick task "${task.title}" to page "${importPage}"`, () =>
       logseq.Editor.appendBlockInPage(importPage, `TODO ${task.title}`))
     if (block) {
-      syncRecords[block.uuid] = syncRecord(task, task.status === 2 ? 2 : 0)
+      const projectName = projectsById.get(task.projectId)?.name || ''
+      if (projectName) await setLocalListName(block, projectName)
+      const dueMs = isoDueDateToMs(task.dueDate ?? null)
+      if (isDbGraph && dueMs !== null) await setLocalDeadline(block, dueMs)
+      syncRecords[block.uuid] = syncRecord(task, task.status === 2 ? 2 : 0, projectName)
       importedFromTickTick += 1
     }
   }
@@ -362,5 +482,9 @@ export async function runSync(): Promise<SyncResult> {
     completedInLogseq: completedDbTaskUuids.size,
     completionCandidates,
     alreadyCompleted,
+    movedListInTickTick,
+    movedListInLogseq,
+    dueDateUpdatedInTickTick,
+    dueDateUpdatedInLogseq,
   }
 }

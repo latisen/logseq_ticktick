@@ -30,8 +30,11 @@ export interface TickTickProjectData {
 export interface SyncRecord {
   taskId: string
   projectId: string
+  projectName: string
   title: string
   status: number
+  // Due date cached as epoch milliseconds (or null when unset) for comparisons.
+  dueDate: number | null
 }
 
 export interface SyncResult {
@@ -43,4 +46,8 @@ export interface SyncResult {
   completedInLogseq: number
   completionCandidates: number
   alreadyCompleted: number
+  movedListInTickTick: number
+  movedListInLogseq: number
+  dueDateUpdatedInTickTick: number
+  dueDateUpdatedInLogseq: number
 }

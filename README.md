@@ -11,15 +11,20 @@ Two-way sync between Logseq tasks and [TickTick](https://ticktick.com), built on
 - Marking a task `DONE`/`CANCELED` in Logseq completes it in TickTick.
 - Completing a task in TickTick marks the matching Logseq block `DONE`.
 - Editing a synced task title in either Logseq or TickTick updates the other side.
+- Moving a task to a different TickTick list, or editing its `ticktick-list` property in Logseq,
+  moves the task on the other side too.
+- Editing a task's due date (DB graphs only, via the built-in `Deadline` property) pushes the change
+  to TickTick; a due date change in TickTick updates the Logseq property.
 
 Sync happens automatically (interval + shortly after you edit the graph), or on demand via the
 toolbar refresh button / command palette.
 
 **Scope:** every task block in the vault is included, including nested blocks. New local tasks go to
-the default TickTick project (or Inbox); existing mappings retain their TickTick project. New remote
-tasks go to the configured import page because TickTick has no Logseq placement information. Due dates,
-priorities, descriptions, subtasks, deletes, and reopening completed tasks are not currently synced.
-If the same title changes on both sides before a sync, Logseq wins.
+the default TickTick project (or Inbox), unless the block already has a `ticktick-list` property naming
+an existing TickTick list. New remote tasks go to the configured import page because TickTick has no
+Logseq placement information. Priorities, descriptions, subtasks, deletes, and reopening completed
+tasks are not currently synced. Clearing a due date in Logseq does not clear it in TickTick. Due date
+sync requires a Logseq **DB graph**. If the same title changes on both sides before a sync, Logseq wins.
 
 ## Setup
 
