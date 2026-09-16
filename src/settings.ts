@@ -27,16 +27,16 @@ export const settingsSchema: SettingSchemaDesc[] = [
   {
     key: 'projectId',
     type: 'string',
-    title: 'TickTick project (list) ID',
+    title: 'Default TickTick project (list) ID',
     description:
-      'Run "TickTick: List projects" from the command palette to see IDs. Leave empty to create new tasks in Inbox.',
+      'New Logseq tasks are created here. Leave empty to create them in Inbox. Existing tasks sync with their own TickTick project.',
     default: '',
   },
   {
     key: 'targetPage',
     type: 'string',
-    title: 'Logseq sync page',
-    description: 'Top-level TODO/DOING/DONE blocks on this page are synced with the TickTick project above.',
+    title: 'Page for new TickTick tasks',
+    description: 'New tasks created in TickTick are appended to this Logseq page. All existing task blocks in the vault are synced.',
     default: 'ticktick',
   },
   {

@@ -1,7 +1,16 @@
 import '@logseq/libs'
 import { BlockEntity } from '@logseq/libs/dist/LSPlugin'
 import * as ticktick from './ticktick'
-import { DONE_MARKERS, PROP_ID, PROP_PROJECT, PROP_STATUS, PluginSettings, TASK_MARKERS } from './types'
+import {
+  DONE_MARKERS,
+  PROP_ID,
+  PROP_PROJECT,
+  PROP_STATUS,
+  PROP_TITLE,
+  PluginSettings,
+  TASK_MARKERS,
+  TickTickTask,
+} from './types'
 
 function getSettings(): PluginSettings {
   return logseq.settings as unknown as PluginSettings
@@ -11,19 +20,29 @@ function isDoneMarker(marker?: string | null): boolean {
   return !!marker && DONE_MARKERS.has(marker.toUpperCase())
 }
 
-// First line of block content, with a leading task marker (if any) stripped off.
 function titleFromContent(content: string, marker?: string | null): string {
   const firstLine = content.split('\n')[0]
-  if (marker) {
-    return firstLine.replace(new RegExp(`^${marker}\\s*`, 'i'), '').trim()
-  }
+  if (marker) return firstLine.replace(new RegExp(`^${marker}\\s*`, 'i'), '').trim()
   return firstLine.replace(/^(TODO|DOING|NOW|LATER|DONE|CANCELED|CANCELLED)\s*/i, '').trim()
 }
 
-async function getLocalTaskBlocks(pageName: string): Promise<BlockEntity[]> {
-  const blocks = await logseq.Editor.getPageBlocksTree(pageName)
-  if (!blocks) return []
-  return blocks.filter((b) => b.marker && TASK_MARKERS.has(b.marker.toUpperCase()))
+function contentWithTitle(block: BlockEntity, title: string): string {
+  const content = block.content || ''
+  const firstLine = content.split('\n')[0]
+  const rest = content.slice(firstLine.length)
+  return `${block.marker || 'TODO'} ${title}${rest}`
+}
+
+async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
+  const result = await logseq.DB.datascriptQuery<Array<[BlockEntity]>>(`
+    [:find (pull ?block [*])
+     :where
+     [?block :block/marker ?marker]
+     [(contains? #{"TODO" "DOING" "NOW" "LATER" "DONE" "CANCELED" "CANCELLED"} ?marker)]]
+  `)
+  return result.map(([block]) => block).filter((block) =>
+    !!block.marker && TASK_MARKERS.has(block.marker.toUpperCase()),
+  )
 }
 
 async function markBlockDone(block: BlockEntity): Promise<void> {
@@ -36,11 +55,17 @@ async function markBlockDone(block: BlockEntity): Promise<void> {
   await logseq.Editor.updateBlock(block.uuid, `${newFirstLine}${rest}`)
 }
 
-async function ensureSyncPageExists(pageName: string): Promise<void> {
-  const page = await logseq.Editor.getPage(pageName)
-  if (!page) {
-    await logseq.Editor.createPage(pageName, {}, { redirect: false, createFirstBlock: false })
-  }
+async function getRemoteTasks(): Promise<Map<string, TickTickTask>> {
+  const projects = await ticktick.listProjects()
+  const projectData = await Promise.all(projects.map((project) => ticktick.getProjectData(project.id)))
+  return new Map(projectData.flatMap((project) => project.tasks || []).map((task) => [task.id, task]))
+}
+
+async function setSyncState(blockUuid: string, task: TickTickTask, status: number): Promise<void> {
+  await logseq.Editor.upsertBlockProperty(blockUuid, PROP_ID, task.id)
+  await logseq.Editor.upsertBlockProperty(blockUuid, PROP_PROJECT, task.projectId)
+  await logseq.Editor.upsertBlockProperty(blockUuid, PROP_TITLE, task.title)
+  await logseq.Editor.upsertBlockProperty(blockUuid, PROP_STATUS, status)
 }
 
 export async function runSync(): Promise<void> {
@@ -50,86 +75,77 @@ export async function runSync(): Promise<void> {
     return
   }
 
-  const pageName = settings.targetPage || 'ticktick'
-  await ensureSyncPageExists(pageName)
+  const importPage = settings.targetPage || 'ticktick'
+  const localBlocks = await getAllLocalTaskBlocks()
+  const remoteById = await getRemoteTasks()
+  const localByTaskId = new Map<string, BlockEntity>()
 
-  const localBlocks = await getLocalTaskBlocks(pageName)
-  const localByTtId = new Map<string, BlockEntity>()
   for (const block of localBlocks) {
-    const ttId = await logseq.Editor.getBlockProperty(block.uuid, PROP_ID)
-    if (ttId) localByTtId.set(String(ttId), block)
+    const taskId = await logseq.Editor.getBlockProperty(block.uuid, PROP_ID)
+    if (taskId) localByTaskId.set(String(taskId), block)
   }
 
-  const remoteOpenTasks = settings.projectId
-    ? (await ticktick.getProjectData(settings.projectId)).tasks || []
-    : []
-  const remoteById = new Map(remoteOpenTasks.map((t) => [t.id, t]))
-
-  // 1) New local tasks -> create in TickTick.
+  // New vault tasks are created in the configured default project or TickTick Inbox.
   for (const block of localBlocks) {
-    const existingId = await logseq.Editor.getBlockProperty(block.uuid, PROP_ID)
-    if (existingId) continue
-
+    if (await logseq.Editor.getBlockProperty(block.uuid, PROP_ID)) continue
     const title = titleFromContent(block.content || '', block.marker)
     if (!title) continue
 
-    const done = isDoneMarker(block.marker)
-    const created = await ticktick.createTask({
+    const task = await ticktick.createTask({
       title,
       ...(settings.projectId ? { projectId: settings.projectId } : {}),
     })
-    await logseq.Editor.upsertBlockProperty(block.uuid, PROP_ID, created.id)
-    await logseq.Editor.upsertBlockProperty(block.uuid, PROP_PROJECT, created.projectId)
-    await logseq.Editor.upsertBlockProperty(block.uuid, PROP_STATUS, done ? 2 : 0)
-    if (done) {
-      await ticktick.completeTask(created.projectId, created.id)
-    }
-    localByTtId.set(created.id, block)
+    const done = isDoneMarker(block.marker)
+    if (done) await ticktick.completeTask(task.projectId, task.id)
+    await setSyncState(block.uuid, task, done ? 2 : 0)
+    localByTaskId.set(task.id, block)
   }
 
-  // 2) Local completions -> complete in TickTick.
-  for (const [ttId, block] of localByTtId) {
-    const storedStatus = Number((await logseq.Editor.getBlockProperty(block.uuid, PROP_STATUS)) ?? 0)
-    if (storedStatus === 2) continue
-    if (!isDoneMarker(block.marker)) continue
-
-    const projectId = String((await logseq.Editor.getBlockProperty(block.uuid, PROP_PROJECT)) || settings.projectId)
+  // Existing mappings carry title and completion changes in either direction.
+  // A simultaneous title conflict resolves to the Logseq version.
+  for (const [taskId, block] of localByTaskId) {
+    const projectId = String((await logseq.Editor.getBlockProperty(block.uuid, PROP_PROJECT)) || '')
     if (!projectId) continue
-    await ticktick.completeTask(projectId, ttId)
-    await logseq.Editor.upsertBlockProperty(block.uuid, PROP_STATUS, 2)
-  }
 
-  // 3) New TickTick tasks -> create local blocks.
-  for (const task of remoteOpenTasks) {
-    if (localByTtId.has(task.id)) continue
-
-    const newBlock = await logseq.Editor.appendBlockInPage(pageName, `TODO ${task.title}`)
-    if (!newBlock) continue
-    await logseq.Editor.upsertBlockProperty(newBlock.uuid, PROP_ID, task.id)
-    await logseq.Editor.upsertBlockProperty(newBlock.uuid, PROP_PROJECT, settings.projectId)
-    await logseq.Editor.upsertBlockProperty(newBlock.uuid, PROP_STATUS, 0)
-  }
-
-  // 4) TickTick completions -> mark local blocks DONE.
-  // Completed tasks are excluded from the project "open tasks" list, so anything
-  // we know about locally as still-open but missing from that list needs to be
-  // double-checked directly (it may just have been completed on the TickTick side).
-  for (const [ttId, block] of localByTtId) {
-    if (remoteById.has(ttId)) continue
-    if (isDoneMarker(block.marker)) continue
-
+    const localTitle = titleFromContent(block.content || '', block.marker)
+    const storedTitle = String((await logseq.Editor.getBlockProperty(block.uuid, PROP_TITLE)) || '')
     const storedStatus = Number((await logseq.Editor.getBlockProperty(block.uuid, PROP_STATUS)) ?? 0)
-    if (storedStatus === 2) continue
+    const localStatus = isDoneMarker(block.marker) ? 2 : 0
+    const remote = remoteById.get(taskId)
 
-    try {
-      const remoteTask = await ticktick.getTask(settings.projectId, ttId)
-      if (remoteTask.status === 2) {
-        await markBlockDone(block)
-        await logseq.Editor.upsertBlockProperty(block.uuid, PROP_STATUS, 2)
+    if (!remote) {
+      if (storedStatus !== 2 && localStatus !== 2) {
+        try {
+          const task = await ticktick.getTask(projectId, taskId)
+          if (task.status === 2) {
+            await markBlockDone(block)
+            await logseq.Editor.upsertBlockProperty(block.uuid, PROP_STATUS, 2)
+          }
+        } catch (e) {
+          console.warn(`[ticktick-sync] Could not load TickTick task ${taskId}:`, e)
+        }
       }
-    } catch (e) {
-      // Task no longer exists on TickTick (e.g. deleted) - leave the local block as-is.
-      console.warn(`[ticktick-sync] Could not verify TickTick task ${ttId}:`, e)
+      continue
     }
+
+    if (localTitle !== storedTitle && localTitle !== remote.title) {
+      await ticktick.updateTask(taskId, { title: localTitle, projectId })
+      await logseq.Editor.upsertBlockProperty(block.uuid, PROP_TITLE, localTitle)
+    } else if (remote.title !== storedTitle && remote.title !== localTitle) {
+      await logseq.Editor.updateBlock(block.uuid, contentWithTitle(block, remote.title))
+      await logseq.Editor.upsertBlockProperty(block.uuid, PROP_TITLE, remote.title)
+    }
+
+    if (localStatus === 2 && storedStatus !== 2) {
+      await ticktick.completeTask(projectId, taskId)
+      await logseq.Editor.upsertBlockProperty(block.uuid, PROP_STATUS, 2)
+    }
+  }
+
+  // New TickTick tasks cannot retain a Logseq location, so they are appended to one import page.
+  for (const task of remoteById.values()) {
+    if (localByTaskId.has(task.id)) continue
+    const block = await logseq.Editor.appendBlockInPage(importPage, `TODO ${task.title}`)
+    if (block) await setSyncState(block.uuid, task, task.status === 2 ? 2 : 0)
   }
 }

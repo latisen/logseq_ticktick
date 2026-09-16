@@ -54,6 +54,10 @@ export async function createTask(task: Partial<TickTickTask>): Promise<TickTickT
   return authedJson('/task', { method: 'POST', body: JSON.stringify(task) })
 }
 
+export async function updateTask(taskId: string, task: Partial<TickTickTask>): Promise<TickTickTask> {
+  return authedJson(`/task/${taskId}`, { method: 'POST', body: JSON.stringify(task) })
+}
+
 export async function completeTask(projectId: string, taskId: string): Promise<void> {
   await authedJson(`/project/${projectId}/task/${taskId}/complete`, { method: 'POST' })
 }

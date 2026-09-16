@@ -31,3 +31,4 @@ export interface TickTickProjectData {
 export const PROP_ID = 'ticktick-id'
 export const PROP_PROJECT = 'ticktick-project'
 export const PROP_STATUS = 'ticktick-status'
+export const PROP_TITLE = 'ticktick-title'

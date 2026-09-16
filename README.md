@@ -6,18 +6,20 @@ Two-way sync between Logseq tasks and [TickTick](https://ticktick.com), built on
 
 ## What it does
 
-- A new `TODO`/`DOING`/... block on your configured Logseq sync page is created as a task in TickTick.
-- A new task in your configured TickTick project is appended as a block on that Logseq page.
+- A new `TODO`/`DOING`/... block anywhere in the vault is created as a task in TickTick.
+- A new task in any normal TickTick project is appended to the configured Logseq import page.
 - Marking a task `DONE`/`CANCELED` in Logseq completes it in TickTick.
 - Completing a task in TickTick marks the matching Logseq block `DONE`.
+- Editing a synced task title in either Logseq or TickTick updates the other side.
 
-Sync happens automatically (interval + shortly after you edit the sync page), or on demand via the
+Sync happens automatically (interval + shortly after you edit the graph), or on demand via the
 toolbar refresh button / command palette.
 
-**Scope (v1):** only top-level blocks on one configured Logseq page are synced, matched against one
-TickTick project (list). This keeps the matching logic simple and predictable. Editing a task's title
-after creation, due dates, subtasks, etc. are not synced (only creation + completion, per the original
-requirements).
+**Scope:** every task block in the vault is included, including nested blocks. New local tasks go to
+the default TickTick project (or Inbox); existing mappings retain their TickTick project. New remote
+tasks go to the configured import page because TickTick has no Logseq placement information. Due dates,
+priorities, descriptions, subtasks, deletes, and reopening completed tasks are not currently synced.
+If the same title changes on both sides before a sync, Logseq wins.
 
 ## Setup
 
@@ -39,13 +41,12 @@ Then in Logseq: enable **Developer mode** in settings, open the plugins dashboar
 ### 3. Configure
 
 1. Open the plugin's settings and paste the API key into **API key**.
-2. Run **"TickTick: List projects"** to see your TickTick project IDs. Paste one into the
-   **TickTick project (list) ID** setting to sync that list, or leave it empty to create new Logseq
-   tasks in TickTick Inbox.
-3. (Optional) change the **Logseq sync page** setting (defaults to the page `ticktick`).
+2. Run **"TickTick: List projects"** to see project IDs. Paste one into the
+   **Default TickTick project (list) ID** setting to choose where newly created Logseq tasks go, or
+   leave it empty to create them in TickTick Inbox.
+3. (Optional) change **Page for new TickTick tasks** (defaults to `ticktick`).
 
-Add tasks as top-level blocks on that page in Logseq, or in the chosen list in TickTick, and they'll
-sync automatically.
+Add task blocks anywhere in Logseq or tasks in any normal TickTick project; they sync automatically.
 
 ## Security note
 
@@ -62,7 +63,7 @@ npm run build  # production bundle in dist/
 Main source files:
 
 - [src/main.ts](src/main.ts) — plugin bootstrap, settings, commands, toolbar button, scheduling.
-- [src/ticktick.ts](src/ticktick.ts) — TickTick OAuth + REST API client.
+- [src/ticktick.ts](src/ticktick.ts) — TickTick REST API client.
 - [src/sync.ts](src/sync.ts) — the actual two-way sync logic.
 - [src/settings.ts](src/settings.ts) — settings schema shown in the plugin's settings panel.
 
