@@ -27,8 +27,9 @@ export interface TickTickProjectData {
   tasks: TickTickTask[]
 }
 
-// Bookkeeping block properties written by this plugin, kept out of the visible content.
-export const PROP_ID = 'ticktick-id'
-export const PROP_PROJECT = 'ticktick-project'
-export const PROP_STATUS = 'ticktick-status'
-export const PROP_TITLE = 'ticktick-title'
+export interface SyncRecord {
+  taskId: string
+  projectId: string
+  title: string
+  status: number
+}

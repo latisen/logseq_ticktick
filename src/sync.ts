@@ -3,11 +3,8 @@ import { BlockEntity } from '@logseq/libs/dist/LSPlugin'
 import * as ticktick from './ticktick'
 import {
   DONE_MARKERS,
-  PROP_ID,
-  PROP_PROJECT,
-  PROP_STATUS,
-  PROP_TITLE,
   PluginSettings,
+  SyncRecord,
   TASK_MARKERS,
   TickTickTask,
 } from './types'
@@ -30,11 +27,27 @@ async function syncStep<T>(description: string, action: () => Promise<T>): Promi
   }
 }
 
-async function getSyncProperty(block: BlockEntity, property: string) {
-  return syncStep(
-    `Logseq could not read property "${property}" for task "${taskLabel(block)}"`,
-    () => logseq.Editor.getBlockProperty(block.uuid, property),
-  )
+const SYNC_STORAGE_KEY = 'sync-mappings-v1'
+
+function getStorage() {
+  return logseq.Assets.makeSandboxStorage()
+}
+
+async function loadSyncRecords(): Promise<Record<string, SyncRecord>> {
+  const value = await syncStep('Logseq could not read TickTick sync mappings', () =>
+    getStorage().getItem(SYNC_STORAGE_KEY))
+  if (!value || typeof value !== 'string') return {}
+  try {
+    return JSON.parse(value) as Record<string, SyncRecord>
+  } catch {
+    console.warn('[ticktick-sync] Ignoring unreadable sync mapping data.')
+    return {}
+  }
+}
+
+async function saveSyncRecords(records: Record<string, SyncRecord>): Promise<void> {
+  await syncStep('Logseq could not save TickTick sync mappings', () =>
+    getStorage().setItem(SYNC_STORAGE_KEY, JSON.stringify(records)))
 }
 
 function isDoneMarker(marker?: string | null): boolean {
@@ -137,22 +150,13 @@ async function getRemoteTasks(): Promise<Map<string, TickTickTask>> {
   return new Map(projectData.flatMap((project) => project.tasks || []).map((task) => [task.id, task]))
 }
 
-function syncProperties(task: TickTickTask, status: number) {
+function syncRecord(task: TickTickTask, status: number): SyncRecord {
   return {
-    [PROP_ID]: task.id,
-    [PROP_PROJECT]: task.projectId,
-    [PROP_TITLE]: task.title,
-    [PROP_STATUS]: status,
+    taskId: task.id,
+    projectId: task.projectId,
+    title: task.title,
+    status,
   }
-}
-
-async function setSyncState(block: BlockEntity, task: TickTickTask, status: number): Promise<void> {
-  await syncStep(
-    `Logseq could not save the TickTick link for task "${taskLabel(block)}"`,
-    () => logseq.Editor.updateBlock(block.uuid, block.content || block.title, {
-      properties: syncProperties(task, status),
-    }),
-  )
 }
 
 export async function runSync(): Promise<number> {
@@ -165,16 +169,17 @@ export async function runSync(): Promise<number> {
   const importPage = settings.targetPage || 'ticktick'
   const localBlocks = await syncStep('Logseq could not query task blocks in this graph', getAllLocalTaskBlocks)
   const remoteById = await getRemoteTasks()
+  const syncRecords = await loadSyncRecords()
   const localByTaskId = new Map<string, BlockEntity>()
 
   for (const block of localBlocks) {
-    const taskId = await getSyncProperty(block, PROP_ID)
-    if (taskId) localByTaskId.set(String(taskId), block)
+    const record = syncRecords[block.uuid]
+    if (record) localByTaskId.set(record.taskId, block)
   }
 
   // New vault tasks are created in the configured default project or TickTick Inbox.
   for (const block of localBlocks) {
-    if (await getSyncProperty(block, PROP_ID)) continue
+    if (syncRecords[block.uuid]) continue
     const title = titleFromContent(blockText(block), block.marker)
     if (!title) continue
 
@@ -185,19 +190,21 @@ export async function runSync(): Promise<number> {
     const done = isBlockDone(block)
     if (done) await syncStep(`TickTick could not complete newly created task "${title}"`, () =>
       ticktick.completeTask(task.projectId, task.id))
-    await setSyncState(block, task, done ? 2 : 0)
+    syncRecords[block.uuid] = syncRecord(task, done ? 2 : 0)
     localByTaskId.set(task.id, block)
   }
 
   // Existing mappings carry title and completion changes in either direction.
   // A simultaneous title conflict resolves to the Logseq version.
   for (const [taskId, block] of localByTaskId) {
-    const projectId = String((await getSyncProperty(block, PROP_PROJECT)) || '')
+    const record = syncRecords[block.uuid]
+    if (!record) continue
+    const projectId = record.projectId
     if (!projectId) continue
 
     const localTitle = titleFromContent(blockText(block), block.marker)
-    const storedTitle = String((await getSyncProperty(block, PROP_TITLE)) || '')
-    const storedStatus = Number((await getSyncProperty(block, PROP_STATUS)) ?? 0)
+    const storedTitle = record.title
+    const storedStatus = record.status
     const localStatus = isBlockDone(block) ? 2 : 0
     const remote = remoteById.get(taskId)
 
@@ -207,8 +214,7 @@ export async function runSync(): Promise<number> {
           const task = await ticktick.getTask(projectId, taskId)
           if (task.status === 2) {
             await syncStep(`Logseq could not mark task "${taskLabel(block)}" as done`, () => markBlockDone(block))
-            await syncStep(`Logseq could not save completion state for task "${taskLabel(block)}"`, () =>
-              logseq.Editor.upsertBlockProperty(block.uuid, PROP_STATUS, 2))
+            record.status = 2
           }
         } catch (e) {
           console.warn(`[ticktick-sync] Could not load TickTick task ${taskId}:`, e)
@@ -220,31 +226,28 @@ export async function runSync(): Promise<number> {
     if (localTitle !== storedTitle && localTitle !== remote.title) {
       await syncStep(`TickTick could not update title for task "${localTitle}"`, () =>
         ticktick.updateTask(taskId, { title: localTitle, projectId }))
-      await syncStep(`Logseq could not save title state for task "${taskLabel(block)}"`, () =>
-        logseq.Editor.upsertBlockProperty(block.uuid, PROP_TITLE, localTitle))
+      record.title = localTitle
     } else if (remote.title !== storedTitle && remote.title !== localTitle) {
       await syncStep(`Logseq could not update title for task "${taskLabel(block)}"`, () =>
         logseq.Editor.updateBlock(block.uuid, contentWithTitle(block, remote.title)))
-      await syncStep(`Logseq could not save title state for task "${taskLabel(block)}"`, () =>
-        logseq.Editor.upsertBlockProperty(block.uuid, PROP_TITLE, remote.title))
+      record.title = remote.title
     }
 
     if (localStatus === 2 && storedStatus !== 2) {
       await syncStep(`TickTick could not complete task "${taskLabel(block)}"`, () =>
         ticktick.completeTask(projectId, taskId))
-      await syncStep(`Logseq could not save completion state for task "${taskLabel(block)}"`, () =>
-        logseq.Editor.upsertBlockProperty(block.uuid, PROP_STATUS, 2))
+      record.status = 2
     }
   }
 
   // New TickTick tasks cannot retain a Logseq location, so they are appended to one import page.
   for (const task of remoteById.values()) {
     if (localByTaskId.has(task.id)) continue
-    await syncStep(`Logseq could not import TickTick task "${task.title}" to page "${importPage}"`, () =>
-      logseq.Editor.appendBlockInPage(importPage, `TODO ${task.title}`, {
-        properties: syncProperties(task, task.status === 2 ? 2 : 0),
-      }))
+    const block = await syncStep(`Logseq could not import TickTick task "${task.title}" to page "${importPage}"`, () =>
+      logseq.Editor.appendBlockInPage(importPage, `TODO ${task.title}`))
+    if (block) syncRecords[block.uuid] = syncRecord(task, task.status === 2 ? 2 : 0)
   }
 
+  await saveSyncRecords(syncRecords)
   return localBlocks.length
 }
