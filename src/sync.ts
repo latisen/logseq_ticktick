@@ -20,33 +20,51 @@ function isDoneMarker(marker?: string | null): boolean {
   return !!marker && DONE_MARKERS.has(marker.toUpperCase())
 }
 
+function statusFromContent(content?: string): string | null {
+  const match = content?.match(/(?:^|\s)Status::\s*(Todo|Doing|Now|Later|Done|Canceled|Cancelled)\s*$/i)
+  return match?.[1]?.toUpperCase() || null
+}
+
+function isTaskBlock(block: BlockEntity): boolean {
+  const status = block.marker || statusFromContent(block.content)
+  return !!status && TASK_MARKERS.has(status.toUpperCase())
+}
+
+function isBlockDone(block: BlockEntity): boolean {
+  return isDoneMarker(block.marker) || isDoneMarker(statusFromContent(block.content))
+}
+
 function titleFromContent(content: string, marker?: string | null): string {
   const firstLine = content.split('\n')[0]
-  if (marker) return firstLine.replace(new RegExp(`^${marker}\\s*`, 'i'), '').trim()
-  return firstLine.replace(/^(TODO|DOING|NOW|LATER|DONE|CANCELED|CANCELLED)\s*/i, '').trim()
+  const withoutMarker = marker
+    ? firstLine.replace(new RegExp(`^${marker}\\s*`, 'i'), '')
+    : firstLine.replace(/^(TODO|DOING|NOW|LATER|DONE|CANCELED|CANCELLED)\s*/i, '')
+  return withoutMarker.replace(/\s+Status::\s*\w+\s*$/i, '').trim()
 }
 
 function contentWithTitle(block: BlockEntity, title: string): string {
   const content = block.content || ''
   const firstLine = content.split('\n')[0]
   const rest = content.slice(firstLine.length)
-  return `${block.marker || 'TODO'} ${title}${rest}`
+  const statusProperty = firstLine.match(/(\s+Status::\s*\w+\s*)$/i)?.[1] || ''
+  return block.marker ? `${block.marker} ${title}${rest}` : `${title}${statusProperty}${rest}`
 }
 
 async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
   const result = await logseq.DB.datascriptQuery<Array<[BlockEntity]>>(`
     [:find (pull ?block [*])
      :where
-     [?block :block/marker ?marker]
-     [(contains? #{"TODO" "DOING" "NOW" "LATER" "DONE" "CANCELED" "CANCELLED"} ?marker)]]
+     [?block :block/content ?content]]
   `)
-  return result.map(([block]) => block).filter((block) =>
-    !!block.marker && TASK_MARKERS.has(block.marker.toUpperCase()),
-  )
+  return result.map(([block]) => block).filter(isTaskBlock)
 }
 
 async function markBlockDone(block: BlockEntity): Promise<void> {
   const content = block.content || ''
+  if (!block.marker && statusFromContent(content)) {
+    await logseq.Editor.updateBlock(block.uuid, content.replace(/Status::\s*\w+\s*$/i, 'Status:: Done'))
+    return
+  }
   const firstLine = content.split('\n')[0]
   const rest = content.slice(firstLine.length)
   const newFirstLine = block.marker
@@ -95,7 +113,7 @@ export async function runSync(): Promise<number> {
       title,
       ...(settings.projectId ? { projectId: settings.projectId } : {}),
     })
-    const done = isDoneMarker(block.marker)
+    const done = isBlockDone(block)
     if (done) await ticktick.completeTask(task.projectId, task.id)
     await setSyncState(block.uuid, task, done ? 2 : 0)
     localByTaskId.set(task.id, block)
@@ -110,7 +128,7 @@ export async function runSync(): Promise<number> {
     const localTitle = titleFromContent(block.content || '', block.marker)
     const storedTitle = String((await logseq.Editor.getBlockProperty(block.uuid, PROP_TITLE)) || '')
     const storedStatus = Number((await logseq.Editor.getBlockProperty(block.uuid, PROP_STATUS)) ?? 0)
-    const localStatus = isDoneMarker(block.marker) ? 2 : 0
+    const localStatus = isBlockDone(block) ? 2 : 0
     const remote = remoteById.get(taskId)
 
     if (!remote) {
