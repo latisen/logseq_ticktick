@@ -1,10 +1,5 @@
 export interface PluginSettings {
-  clientId: string
-  clientSecret: string
-  redirectUri: string
-  authCode: string
-  accessToken: string
-  refreshToken: string
+  apiKey: string
   projectId: string
   targetPage: string
   pollIntervalSec: number

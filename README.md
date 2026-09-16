@@ -21,13 +21,10 @@ requirements).
 
 ## Setup
 
-### 1. Create a TickTick app
+### 1. Create an API key
 
-1. Go to <https://developer.ticktick.com/manage> and create an app.
-2. Set the **Redirect URL** to something like `http://localhost:8080/callback` — it does not need to
-   be a real, reachable server, it's only used so TickTick can put the authorization `code` in the
-   address bar for you to copy.
-3. Copy the **Client ID** and **Client Secret**.
+1. Go to <https://developer.ticktick.com/manage>.
+2. Create or copy your personal **API Key**.
 
 ### 2. Install the plugin
 
@@ -39,20 +36,12 @@ npm run build
 Then in Logseq: enable **Developer mode** in settings, open the plugins dashboard (`t` `p`), click
 **Load unpacked plugin**, and select this folder.
 
-### 3. Configure & connect
+### 3. Configure
 
-1. Open the plugin's settings and fill in **Client ID**, **Client Secret**, and **Redirect URI**
-   (matching what you set on developer.ticktick.com).
-2. Run the command **"TickTick: 1. Open authorization page"** (`Ctrl/Cmd+Shift+P`). Approve access in
-   the browser tab that opens.
-3. You'll land on a page that fails to load (expected, since the redirect URI isn't a real server) —
-   copy the `code=...` value from the browser's address bar.
-4. Paste it into the **Authorization code** setting, then run
-   **"TickTick: 2. Exchange authorization code"**. On success, the access/refresh tokens are filled in
-   automatically.
-5. Run **"TickTick: List projects"** to see your TickTick project IDs, then paste the one you want to
+1. Open the plugin's settings and paste the API key into **API key**.
+2. Run **"TickTick: List projects"** to see your TickTick project IDs, then paste the one you want to
    sync into the **TickTick project (list) ID** setting.
-6. (Optional) change the **Logseq sync page** setting (defaults to the page `ticktick`).
+3. (Optional) change the **Logseq sync page** setting (defaults to the page `ticktick`).
 
 Add tasks as top-level blocks on that page in Logseq, or in the chosen list in TickTick, and they'll
 sync automatically.

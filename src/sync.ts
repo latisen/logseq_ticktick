@@ -45,7 +45,7 @@ async function ensureSyncPageExists(pageName: string): Promise<void> {
 
 export async function runSync(): Promise<void> {
   const settings = getSettings()
-  if (!settings.accessToken || !settings.projectId) {
+  if (!settings.apiKey || !settings.projectId) {
     console.warn('[ticktick-sync] Skipping sync: not connected or no project configured.')
     return
   }

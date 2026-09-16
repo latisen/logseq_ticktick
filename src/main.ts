@@ -43,47 +43,6 @@ function debounceSyncOnChange() {
   debounceTimer = setTimeout(() => safeSync('graph change'), 3000)
 }
 
-async function connectStep1() {
-  const settings = getSettings()
-  if (!settings.clientId || !settings.clientSecret) {
-    await logseq.UI.showMsg('Please fill in Client ID and Client Secret in the plugin settings first.', 'warning')
-    return
-  }
-  const state = Math.random().toString(36).slice(2)
-  const url = ticktick.buildAuthorizeUrl(state)
-  if (logseq.App.openExternalLink) {
-    await logseq.App.openExternalLink(url)
-  } else {
-    window.open(url, '_blank')
-  }
-  await logseq.UI.showMsg(
-    'Approve access in your browser, then copy the "code" parameter from the redirected URL into the ' +
-      '"Authorization code" setting and run "TickTick: 2. Exchange authorization code".',
-    'success',
-    { timeout: 8000 },
-  )
-}
-
-async function connectStep2() {
-  const settings = getSettings()
-  if (!settings.authCode) {
-    await logseq.UI.showMsg('Paste the authorization code into settings first.', 'warning')
-    return
-  }
-  try {
-    const tokens = await ticktick.exchangeCodeForToken(settings.authCode)
-    await logseq.updateSettings({
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token || '',
-      authCode: '',
-    })
-    await logseq.UI.showMsg('Connected to TickTick successfully!', 'success')
-  } catch (e) {
-    console.error('[ticktick-sync] token exchange failed:', e)
-    await logseq.UI.showMsg(`Could not exchange the code: ${(e as Error).message}`, 'error')
-  }
-}
-
 async function listProjectsCommand() {
   try {
     const projects = await ticktick.listProjects()
@@ -103,14 +62,6 @@ async function listProjectsCommand() {
 function main() {
   logseq.useSettingsSchema(settingsSchema)
 
-  logseq.App.registerCommandPalette(
-    { key: 'ticktick-connect-1', label: 'TickTick: 1. Open authorization page' },
-    connectStep1,
-  )
-  logseq.App.registerCommandPalette(
-    { key: 'ticktick-connect-2', label: 'TickTick: 2. Exchange authorization code' },
-    connectStep2,
-  )
   logseq.App.registerCommandPalette({ key: 'ticktick-list-projects', label: 'TickTick: List projects' }, listProjectsCommand)
   logseq.App.registerCommandPalette(
     { key: 'ticktick-sync-now', label: 'TickTick: Sync now' },
