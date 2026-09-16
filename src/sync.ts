@@ -137,6 +137,22 @@ async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
   return isDbGraph ? result.map(([block]) => block) : result.map(([block]) => block).filter(isTaskBlock)
 }
 
+async function getCompletedDbTaskUuids(): Promise<Set<string>> {
+  if (!(await logseq.App.checkCurrentIsDbGraph())) return new Set()
+  const uuids = await logseq.DB.datascriptQuery<Array<string>>(`
+    [:find [?uuid ...]
+     :where
+     [?block :block/uuid ?uuid]
+     [?block :logseq.property/status ?status]
+     [?status :db/ident :logseq.property/status.done]]
+  `)
+  return new Set(uuids.map(String))
+}
+
+function isBlockCompleted(block: BlockEntity, completedDbTaskUuids: Set<string>): boolean {
+  return completedDbTaskUuids.has(block.uuid) || isBlockDone(block)
+}
+
 async function markBlockDone(block: BlockEntity): Promise<void> {
   const content = blockText(block)
   if (await logseq.App.checkCurrentIsDbGraph()) {
@@ -209,6 +225,10 @@ export async function runSync(): Promise<SyncResult> {
 
   const importPage = settings.targetPage || 'ticktick'
   const localBlocks = await syncStep('Logseq could not query task blocks in this graph', getAllLocalTaskBlocks)
+  const completedDbTaskUuids = await syncStep(
+    'Logseq could not query completed task statuses',
+    getCompletedDbTaskUuids,
+  )
   const remoteById = await getRemoteTasks()
   const syncRecords = await loadSyncRecords()
   const localByTaskId = new Map<string, BlockEntity>()
@@ -229,7 +249,7 @@ export async function runSync(): Promise<SyncResult> {
           taskId: String(legacyTaskId),
           projectId: String(projectId || ''),
           title: String(title || titleFromContent(blockText(block), block.marker)),
-          status: isBlockDone(block) ? 2 : 0,
+          status: isBlockCompleted(block, completedDbTaskUuids) ? 2 : 0,
         }
         syncRecords[block.uuid] = record
         migratedMappings += 1
@@ -248,7 +268,7 @@ export async function runSync(): Promise<SyncResult> {
       `TickTick could not create task "${title}"`,
       () => ticktick.createTask({ title, ...(settings.projectId ? { projectId: settings.projectId } : {}) }),
     )
-    const done = isBlockDone(block)
+    const done = isBlockCompleted(block, completedDbTaskUuids)
     if (done) await syncStep(`TickTick could not complete newly created task "${title}"`, () =>
       ticktick.completeTask(task.projectId, task.id))
     syncRecords[block.uuid] = syncRecord(task, done ? 2 : 0)
@@ -267,7 +287,7 @@ export async function runSync(): Promise<SyncResult> {
     const localTitle = titleFromContent(blockText(block), block.marker)
     const storedTitle = record.title
     const storedStatus = record.status
-    const localStatus = isBlockDone(block) ? 2 : 0
+    const localStatus = isBlockCompleted(block, completedDbTaskUuids) ? 2 : 0
     const remote = remoteById.get(taskId)
 
     if (!remote) {
