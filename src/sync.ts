@@ -136,7 +136,7 @@ async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
 }
 
 async function markBlockDone(block: BlockEntity): Promise<void> {
-  const content = block.content || ''
+  const content = blockText(block)
   if (statusFromProperties(block)) {
     await logseq.Editor.upsertBlockProperty(block.uuid, 'status', 'logseq.property/status.done')
     return
@@ -151,6 +151,14 @@ async function markBlockDone(block: BlockEntity): Promise<void> {
     ? firstLine.replace(new RegExp(`^${block.marker}`, 'i'), 'DONE')
     : `DONE ${firstLine}`
   await logseq.Editor.updateBlock(block.uuid, `${newFirstLine}${rest}`)
+}
+
+async function repairLegacyDonePrefix(block: BlockEntity): Promise<boolean> {
+  const text = blockText(block)
+  const repaired = text.replace(/^DONE\s+(.+?\s+Status::\s*)Todo\s*$/i, '$1Done')
+  if (repaired === text) return false
+  await logseq.Editor.updateBlock(block.uuid, repaired)
+  return true
 }
 
 async function getRemoteTasks(): Promise<Map<string, TickTickTask>> {
@@ -188,6 +196,7 @@ export async function runSync(): Promise<SyncResult> {
   let migratedMappings = 0
 
   for (const block of localBlocks) {
+    await syncStep(`Logseq could not repair status for task "${taskLabel(block)}"`, () => repairLegacyDonePrefix(block))
     let record = syncRecords[block.uuid]
     if (!record) {
       const legacyTaskId = await logseq.Editor.getBlockProperty(block.uuid, LEGACY_ID_PROPERTY)
