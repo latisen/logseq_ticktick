@@ -1,0 +1,28 @@
+{
+  "name": "logseq-plugin-ticktick-sync",
+  "version": "0.1.0",
+  "description": "Two-way sync between Logseq tasks and TickTick using the TickTick Open API.",
+  "main": "dist/index.html",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "keywords": [
+    "logseq",
+    "plugin",
+    "ticktick"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@logseq/libs": "^0.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.11"
+  },
+  "logseq": {
+    "id": "logseq-plugin-ticktick-sync",
+    "title": "TickTick Sync",
+    "icon": "./icon.svg"
+  }
+}
