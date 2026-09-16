@@ -33,3 +33,10 @@ export interface SyncRecord {
   title: string
   status: number
 }
+
+export interface SyncResult {
+  localTaskCount: number
+  createdInTickTick: number
+  importedFromTickTick: number
+  migratedMappings: number
+}

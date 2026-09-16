@@ -5,6 +5,7 @@ import {
   DONE_MARKERS,
   PluginSettings,
   SyncRecord,
+  SyncResult,
   TASK_MARKERS,
   TickTickTask,
 } from './types'
@@ -28,6 +29,9 @@ async function syncStep<T>(description: string, action: () => Promise<T>): Promi
 }
 
 const SYNC_STORAGE_KEY = 'sync-mappings-v1'
+const LEGACY_ID_PROPERTY = 'ticktick-id'
+const LEGACY_PROJECT_PROPERTY = 'ticktick-project'
+const LEGACY_TITLE_PROPERTY = 'ticktick-title'
 
 function getStorage() {
   return logseq.Assets.makeSandboxStorage()
@@ -167,11 +171,11 @@ function syncRecord(task: TickTickTask, status: number): SyncRecord {
   }
 }
 
-export async function runSync(): Promise<number> {
+export async function runSync(): Promise<SyncResult> {
   const settings = getSettings()
   if (!settings.apiKey) {
     console.warn('[ticktick-sync] Skipping sync: no API key configured.')
-    return 0
+    return { localTaskCount: 0, createdInTickTick: 0, importedFromTickTick: 0, migratedMappings: 0 }
   }
 
   const importPage = settings.targetPage || 'ticktick'
@@ -179,9 +183,27 @@ export async function runSync(): Promise<number> {
   const remoteById = await getRemoteTasks()
   const syncRecords = await loadSyncRecords()
   const localByTaskId = new Map<string, BlockEntity>()
+  let createdInTickTick = 0
+  let importedFromTickTick = 0
+  let migratedMappings = 0
 
   for (const block of localBlocks) {
-    const record = syncRecords[block.uuid]
+    let record = syncRecords[block.uuid]
+    if (!record) {
+      const legacyTaskId = await logseq.Editor.getBlockProperty(block.uuid, LEGACY_ID_PROPERTY)
+      if (legacyTaskId) {
+        const projectId = await logseq.Editor.getBlockProperty(block.uuid, LEGACY_PROJECT_PROPERTY)
+        const title = await logseq.Editor.getBlockProperty(block.uuid, LEGACY_TITLE_PROPERTY)
+        record = {
+          taskId: String(legacyTaskId),
+          projectId: String(projectId || ''),
+          title: String(title || titleFromContent(blockText(block), block.marker)),
+          status: isBlockDone(block) ? 2 : 0,
+        }
+        syncRecords[block.uuid] = record
+        migratedMappings += 1
+      }
+    }
     if (record) localByTaskId.set(record.taskId, block)
   }
 
@@ -199,6 +221,7 @@ export async function runSync(): Promise<number> {
     if (done) await syncStep(`TickTick could not complete newly created task "${title}"`, () =>
       ticktick.completeTask(task.projectId, task.id))
     syncRecords[block.uuid] = syncRecord(task, done ? 2 : 0)
+    createdInTickTick += 1
     localByTaskId.set(task.id, block)
   }
 
@@ -253,9 +276,12 @@ export async function runSync(): Promise<number> {
     if (localByTaskId.has(task.id)) continue
     const block = await syncStep(`Logseq could not import TickTick task "${task.title}" to page "${importPage}"`, () =>
       logseq.Editor.appendBlockInPage(importPage, `TODO ${task.title}`))
-    if (block) syncRecords[block.uuid] = syncRecord(task, task.status === 2 ? 2 : 0)
+    if (block) {
+      syncRecords[block.uuid] = syncRecord(task, task.status === 2 ? 2 : 0)
+      importedFromTickTick += 1
+    }
   }
 
   await saveSyncRecords(syncRecords)
-  return localBlocks.length
+  return { localTaskCount: localBlocks.length, createdInTickTick, importedFromTickTick, migratedMappings }
 }

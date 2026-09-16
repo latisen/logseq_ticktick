@@ -17,9 +17,15 @@ async function safeSync(reason: string) {
   syncing = true
   try {
     console.log(`[ticktick-sync] running sync (${reason})`)
-    const localTaskCount = await runSync()
+    const result = await runSync()
     if (reason === 'manual command' || reason === 'toolbar click') {
-      await logseq.UI.showMsg(`TickTick sync completed. Found ${localTaskCount} Logseq task block(s).`, 'success')
+      await logseq.UI.showMsg(
+        `TickTick sync completed. Found ${result.localTaskCount} Logseq task(s); ` +
+          `created ${result.createdInTickTick} in TickTick; imported ${result.importedFromTickTick}; ` +
+          `migrated ${result.migratedMappings} older link(s).`,
+        'success',
+        { timeout: 10000 },
+      )
     }
   } catch (e) {
     console.error('[ticktick-sync] sync failed:', e)
