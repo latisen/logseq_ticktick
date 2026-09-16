@@ -22,7 +22,7 @@ async function safeSync(reason: string) {
       await logseq.UI.showMsg(
         `TickTick sync completed. Found ${result.localTaskCount} Logseq task(s); ` +
           `created ${result.createdInTickTick} in TickTick; imported ${result.importedFromTickTick}; ` +
-          `migrated ${result.migratedMappings} older link(s).`,
+          `completed ${result.completedInTickTick} in TickTick; migrated ${result.migratedMappings} older link(s).`,
         'success',
         { timeout: 10000 },
       )

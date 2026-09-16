@@ -39,4 +39,5 @@ export interface SyncResult {
   createdInTickTick: number
   importedFromTickTick: number
   migratedMappings: number
+  completedInTickTick: number
 }

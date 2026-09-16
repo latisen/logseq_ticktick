@@ -86,7 +86,8 @@ function normalizeStatus(value: unknown): string | null {
 
 function statusFromProperties(block: BlockEntity): string | null {
   const value = block.properties?.status ?? block.properties?.Status ??
-    block['logseq.property/status'] ?? block['logseq.task/status']
+    block['logseq.property/status'] ?? block[':logseq.property/status'] ??
+    block['logseq.task/status'] ?? block[':logseq.task/status']
   return normalizeStatus(value)
 }
 
@@ -203,7 +204,7 @@ export async function runSync(): Promise<SyncResult> {
   const settings = getSettings()
   if (!settings.apiKey) {
     console.warn('[ticktick-sync] Skipping sync: no API key configured.')
-    return { localTaskCount: 0, createdInTickTick: 0, importedFromTickTick: 0, migratedMappings: 0 }
+    return { localTaskCount: 0, createdInTickTick: 0, importedFromTickTick: 0, migratedMappings: 0, completedInTickTick: 0 }
   }
 
   const importPage = settings.targetPage || 'ticktick'
@@ -214,6 +215,7 @@ export async function runSync(): Promise<SyncResult> {
   let createdInTickTick = 0
   let importedFromTickTick = 0
   let migratedMappings = 0
+  let completedInTickTick = 0
 
   for (const block of localBlocks) {
     await syncStep(`Logseq could not repair status for task "${taskLabel(block)}"`, () => repairLegacyDonePrefix(block))
@@ -297,6 +299,7 @@ export async function runSync(): Promise<SyncResult> {
       await syncStep(`TickTick could not complete task "${taskLabel(block)}"`, () =>
         ticktick.completeTask(projectId, taskId))
       record.status = 2
+      completedInTickTick += 1
     }
   }
 
@@ -312,5 +315,5 @@ export async function runSync(): Promise<SyncResult> {
   }
 
   await saveSyncRecords(syncRecords)
-  return { localTaskCount: localBlocks.length, createdInTickTick, importedFromTickTick, migratedMappings }
+  return { localTaskCount: localBlocks.length, createdInTickTick, importedFromTickTick, migratedMappings, completedInTickTick }
 }
