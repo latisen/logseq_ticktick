@@ -11,6 +11,10 @@ function getSettings(): PluginSettings {
 let syncTimer: ReturnType<typeof setInterval> | null = null
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let syncing = false
+// A sync writes block properties itself, which fires DB.onChanged again. Without this
+// cooldown, every sync would immediately re-schedule another one, multiplying API calls.
+let lastSyncEndedAt = 0
+const AUTO_SYNC_COOLDOWN_MS = 15000
 
 async function safeSync(reason: string) {
   if (syncing) return
@@ -36,6 +40,7 @@ async function safeSync(reason: string) {
     await logseq.UI.showMsg(`TickTick sync failed: ${(e as Error).message}`, 'error')
   } finally {
     syncing = false
+    lastSyncEndedAt = Date.now()
   }
 }
 
@@ -52,8 +57,10 @@ function scheduleAutoSync() {
 
 function debounceSyncOnChange() {
   if (!getSettings().autoSync) return
+  if (syncing) return
+  if (Date.now() - lastSyncEndedAt < AUTO_SYNC_COOLDOWN_MS) return
   if (debounceTimer) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => safeSync('graph change'), 3000)
+  debounceTimer = setTimeout(() => safeSync('graph change'), 5000)
 }
 
 async function listProjectsCommand() {

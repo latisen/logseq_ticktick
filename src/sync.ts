@@ -15,7 +15,7 @@ function getSettings(): PluginSettings {
 }
 
 function taskLabel(block: BlockEntity): string {
-  const title = block.title || block.content || block.uuid
+  const title = block.fullTitle || block.title || block.content || block.uuid
   return title.length > 80 ? `${title.slice(0, 77)}...` : title
 }
 
@@ -120,7 +120,7 @@ function contentWithTitle(block: BlockEntity, title: string): string {
 }
 
 function blockText(block: BlockEntity): string {
-  return block.title || block.content || ''
+  return block.fullTitle || block.title || block.content || ''
 }
 
 async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
@@ -242,7 +242,15 @@ interface RemoteData {
   projectsById: Map<string, { id: string; name: string }>
 }
 
+// Reused across syncs within the TTL so bursts of auto-sync triggers (interval +
+// graph-change debounce) don't each re-fetch every project from TickTick.
+const REMOTE_DATA_CACHE_MS = 90000
+let remoteDataCache: { data: RemoteData; fetchedAt: number } | null = null
+
 async function getRemoteData(): Promise<RemoteData> {
+  if (remoteDataCache && Date.now() - remoteDataCache.fetchedAt < REMOTE_DATA_CACHE_MS) {
+    return remoteDataCache.data
+  }
   const projects = await syncStep('TickTick could not list projects', () => ticktick.listProjects())
   const projectData = await Promise.all(projects.map((project) => syncStep(
     `TickTick could not read project "${project.name}" (${project.id})`,
@@ -250,8 +258,14 @@ async function getRemoteData(): Promise<RemoteData> {
   )))
   const tasksById = new Map(projectData.flatMap((project) => project.tasks || []).map((task) => [task.id, task]))
   const projectsById = new Map(projects.map((project) => [project.id, project]))
-  return { tasksById, projectsById }
+  const data = { tasksById, projectsById }
+  remoteDataCache = { data, fetchedAt: Date.now() }
+  return data
 }
+
+// TickTick Inbox tasks are never covered by getRemoteData, so we'd otherwise have to
+// ask about each one individually on every sync. This throttles that per-task check.
+const INBOX_CHECK_INTERVAL_MS = 10 * 60 * 1000
 
 function syncRecord(task: TickTickTask, status: number, projectName: string): SyncRecord {
   return {
@@ -352,6 +366,8 @@ export async function runSync(): Promise<SyncResult> {
     syncRecords[block.uuid] = syncRecord(task, done ? 2 : 0, projectName)
     createdInTickTick += 1
     localByTaskId.set(task.id, block)
+    // Keep the cached remote data in sync so a follow-up sync within the cache TTL sees this task.
+    remoteById.set(task.id, { ...task, status: done ? 2 : task.status })
   }
 
   // Existing mappings carry title, list, due date, and completion changes in either direction.
@@ -374,17 +390,25 @@ export async function runSync(): Promise<SyncResult> {
     }
 
     if (!remote) {
-      // TickTick does not return Inbox in its project listing. Verify mapped
-      // tasks directly so Inbox tasks can still sync in both directions.
+      // TickTick does not return Inbox in its project listing. Pushing a local
+      // completion never needs an extra read, so do that without any API call.
+      if (localStatus === 2 && storedStatus !== 2) {
+        await syncStep(`TickTick could not complete task "${taskLabel(block)}"`, () =>
+          ticktick.completeTask(projectId, taskId))
+        record.status = 2
+        completedInTickTick += 1
+        continue
+      }
+
+      // Detecting a TickTick-side completion needs a direct read (Inbox isn't in the
+      // project listing), so throttle it instead of checking every single sync.
+      const lastChecked = record.lastCheckedAt || 0
+      if (localStatus === 2 || Date.now() - lastChecked < INBOX_CHECK_INTERVAL_MS) continue
       try {
         const task = await syncStep(`TickTick could not load task "${taskLabel(block)}"`, () =>
           ticktick.getTask(projectId, taskId))
-        if (localStatus === 2 && task.status !== 2) {
-          await syncStep(`TickTick could not complete task "${taskLabel(block)}"`, () =>
-            ticktick.completeTask(projectId, taskId))
-          record.status = 2
-          completedInTickTick += 1
-        } else if (task.status === 2 && localStatus !== 2) {
+        record.lastCheckedAt = Date.now()
+        if (task.status === 2) {
           await syncStep(`Logseq could not mark task "${taskLabel(block)}" as done`, () => markBlockDone(block))
           record.status = 2
         }
@@ -406,6 +430,7 @@ export async function runSync(): Promise<SyncResult> {
         record.projectId = targetProject.id
         record.projectName = targetProject.name
         projectId = targetProject.id
+        remote.projectId = targetProject.id
         movedListInTickTick += 1
       }
     } else if (remote.projectId !== record.projectId) {
@@ -421,6 +446,7 @@ export async function runSync(): Promise<SyncResult> {
       await syncStep(`TickTick could not update title for task "${localTitle}"`, () =>
         ticktick.updateTask(taskId, { title: localTitle, projectId }))
       record.title = localTitle
+      remote.title = localTitle
     } else if (remote.title !== storedTitle && remote.title !== localTitle) {
       await syncStep(`Logseq could not update title for task "${taskLabel(block)}"`, () =>
         logseq.Editor.updateBlock(block.uuid, contentWithTitle(block, remote.title)))
@@ -438,6 +464,7 @@ export async function runSync(): Promise<SyncResult> {
         await syncStep(`TickTick could not update the due date for task "${taskLabel(block)}"`, () =>
           ticktick.updateTask(taskId, { dueDate: msToIsoDueDate(localDueMs), isAllDay: false, projectId }))
         record.dueDate = localDueMs
+        remote.dueDate = msToIsoDueDate(localDueMs)
         dueDateUpdatedInTickTick += 1
       } else if (remoteDueMs !== storedDueMs && remoteDueMs !== localDueMs) {
         await syncStep(`Logseq could not update the due date for task "${taskLabel(block)}"`, () =>
@@ -453,6 +480,7 @@ export async function runSync(): Promise<SyncResult> {
       await syncStep(`TickTick could not complete task "${taskLabel(block)}"`, () =>
         ticktick.completeTask(projectId, taskId))
       record.status = 2
+      remote.status = 2
       completedInTickTick += 1
     }
   }

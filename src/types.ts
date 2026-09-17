@@ -35,6 +35,9 @@ export interface SyncRecord {
   status: number
   // Due date cached as epoch milliseconds (or null when unset) for comparisons.
   dueDate: number | null
+  // Last time we asked TickTick directly about this task (Inbox tasks only), to
+  // avoid one extra API call per task on every sync.
+  lastCheckedAt?: number
 }
 
 export interface SyncResult {
