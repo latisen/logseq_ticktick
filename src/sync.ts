@@ -154,7 +154,8 @@ async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
       [:find (pull ?block [*])
        :where
        [?block :block/tags ?tag]
-       [?tag :db/ident :logseq.class/Task]]
+       [?tag :db/ident ?tag-ident]
+       [(contains? #{:logseq.class/Task :logseq.class/Todo} ?tag-ident)]]
     `),
     logseq.DB.datascriptQuery<Array<[BlockEntity]>>(`
       [:find (pull ?block [*])
@@ -165,7 +166,7 @@ async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
 
   const blocksByUuid = new Map<string, BlockEntity>()
   for (const [block] of [...classResults, ...statusResults]) {
-    if (isTaskBlock(block)) blocksByUuid.set(block.uuid, block)
+    blocksByUuid.set(block.uuid, block)
   }
   return [...blocksByUuid.values()]
 }
