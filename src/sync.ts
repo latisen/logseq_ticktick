@@ -119,8 +119,11 @@ function contentWithTitle(block: BlockEntity, title: string): string {
   return block.marker ? `${block.marker} ${title}${rest}` : `${title}${statusProperty}${rest}`
 }
 
-function blockText(block: BlockEntity): string {
-  return block.fullTitle || block.title || block.content || ''
+async function blockText(block: BlockEntity, titlesByUuid?: Map<string, string>): Promise<string> {
+  let text = block.fullTitle || block.title || block.content || ''
+  if (!titlesByUuid) return text
+  return text.replace(/\[\[([0-9a-f]{8}-[0-9a-f-]{27,})\]\]/gi, (_, uuid: string) =>
+    `[[${titlesByUuid.get(uuid) || uuid}]]`)
 }
 
 function buildLogseqLink(graphName: string, blockUuid: string): string {
@@ -184,7 +187,7 @@ function isBlockCompleted(block: BlockEntity, completedDbTaskUuids: Set<string>)
 }
 
 async function markBlockDone(block: BlockEntity): Promise<void> {
-  const content = blockText(block)
+  const content = block.fullTitle || block.title || block.content || ''
   if (await logseq.App.checkCurrentIsDbGraph()) {
     if (doneStatusId === null) {
       doneStatusId = await syncStep('Logseq could not find its built-in Done status', () =>
@@ -221,7 +224,7 @@ async function markBlockDone(block: BlockEntity): Promise<void> {
 }
 
 async function repairLegacyDonePrefix(block: BlockEntity): Promise<boolean> {
-  const text = blockText(block)
+  const text = block.fullTitle || block.title || block.content || ''
   const repaired = text.replace(/^DONE\s+(.+?\s+Status::\s*)(?:Todo|Doing|Now|Later|Done|Canceled|Cancelled)\s*$/i, '$1Done')
   if (repaired === text) return false
   await logseq.Editor.updateBlock(block.uuid, repaired)
@@ -324,6 +327,13 @@ export async function runSync(): Promise<SyncResult> {
   const graphName = graph?.name || ''
   const importPage = settings.targetPage || 'ticktick'
   const localBlocks = await syncStep('Logseq could not query task blocks in this graph', getAllLocalTaskBlocks)
+  const titleRows = isDbGraph
+    ? await syncStep('Logseq could not resolve block reference titles', () => logseq.DB.datascriptQuery<Array<[string, string]>>(`
+        [:find ?uuid ?title
+         :where [?block :block/uuid ?uuid] [?block :block/title ?title]]
+      `))
+    : []
+  const titlesByUuid = new Map(titleRows.map(([uuid, title]) => [String(uuid), title]))
   const completedDbTaskUuids = await syncStep(
     'Logseq could not query completed task statuses',
     getCompletedDbTaskUuids,
@@ -354,7 +364,7 @@ export async function runSync(): Promise<SyncResult> {
           taskId: String(legacyTaskId),
           projectId,
           projectName: projectsById.get(projectId)?.name || '',
-          title: String(title || titleFromContent(blockText(block), block.marker)),
+          title: String(title || titleFromContent(await blockText(block, titlesByUuid), block.marker)),
           status: isBlockCompleted(block, completedDbTaskUuids) ? 2 : 0,
           dueDate: isDbGraph ? getLocalScheduledMs(block) : null,
         }
@@ -369,7 +379,7 @@ export async function runSync(): Promise<SyncResult> {
   // unless the block already names a target list via the "ticktick-list" property.
   for (const block of localBlocks) {
     if (syncRecords[block.uuid]) continue
-    const title = titleFromContent(blockText(block), block.marker)
+    const title = titleFromContent(await blockText(block, titlesByUuid), block.marker)
     if (!title) continue
 
     const desiredListName = getLocalListName(block)
@@ -412,7 +422,7 @@ export async function runSync(): Promise<SyncResult> {
     let projectId = record.projectId
     if (!projectId) continue
 
-    const localTitle = titleFromContent(blockText(block), block.marker)
+    const localTitle = titleFromContent(await blockText(block, titlesByUuid), block.marker)
     const storedTitle = record.title
     const storedStatus = record.status
     const localStatus = isBlockCompleted(block, completedDbTaskUuids) ? 2 : 0
