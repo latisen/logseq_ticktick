@@ -123,6 +123,19 @@ function blockText(block: BlockEntity): string {
   return block.fullTitle || block.title || block.content || ''
 }
 
+function buildLogseqLink(graphName: string, blockUuid: string): string {
+  return `logseq://graph/${encodeURIComponent(graphName)}?block-id=${encodeURIComponent(blockUuid)}`
+}
+
+function contentWithLogseqLink(content: string | undefined, link: string): string {
+  const withoutOldLink = (content || '').replace(/\n*Open in Logseq: \[Open in Logseq\]\([^)]*\)/g, '').trimEnd()
+  return `${withoutOldLink}${withoutOldLink ? '\n\n' : ''}Open in Logseq: [Open in Logseq](${link})`
+}
+
+function hasLogseqLink(content: string | undefined, link: string): boolean {
+  return !!content?.includes(`](${link})`)
+}
+
 async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
   const isDbGraph = await logseq.App.checkCurrentIsDbGraph()
   const query = isDbGraph
@@ -290,6 +303,8 @@ export async function runSync(): Promise<SyncResult> {
   }
 
   const isDbGraph = await logseq.App.checkCurrentIsDbGraph()
+  const graph = await syncStep('Logseq could not determine the current graph', () => logseq.App.getCurrentGraph())
+  const graphName = graph?.name || ''
   const importPage = settings.targetPage || 'ticktick'
   const localBlocks = await syncStep('Logseq could not query task blocks in this graph', getAllLocalTaskBlocks)
   const completedDbTaskUuids = await syncStep(
@@ -346,11 +361,13 @@ export async function runSync(): Promise<SyncResult> {
       : undefined
     const projectId = desiredProject?.id || settings.projectId
     const localDueMs = isDbGraph ? getLocalScheduledMs(block) : null
+    const logseqLink = buildLogseqLink(graphName, block.uuid)
 
     const task = await syncStep(
       `TickTick could not create task "${title}"`,
       () => ticktick.createTask({
         title,
+        content: contentWithLogseqLink('', logseqLink),
         ...(projectId ? { projectId } : {}),
         ...(localDueMs !== null ? { dueDate: msToIsoDueDate(localDueMs), isAllDay: false } : {}),
       }),
@@ -383,6 +400,7 @@ export async function runSync(): Promise<SyncResult> {
     const storedStatus = record.status
     const localStatus = isBlockCompleted(block, completedDbTaskUuids) ? 2 : 0
     const remote = remoteById.get(taskId)
+    const logseqLink = buildLogseqLink(graphName, block.uuid)
 
     if (localStatus === 2) {
       completionCandidates += 1
@@ -416,6 +434,13 @@ export async function runSync(): Promise<SyncResult> {
         console.warn(`[ticktick-sync] Could not load TickTick task ${taskId}:`, error)
       }
       continue
+    }
+
+    if (!hasLogseqLink(remote.content, logseqLink)) {
+      const nextContent = contentWithLogseqLink(remote.content, logseqLink)
+      await syncStep(`TickTick could not save the Logseq link for task "${taskLabel(block)}"`, () =>
+        ticktick.updateTask(taskId, { content: nextContent, projectId }))
+      remote.content = nextContent
     }
 
     // Moving a task between TickTick lists: edit the "ticktick-list" property in Logseq,
@@ -492,6 +517,11 @@ export async function runSync(): Promise<SyncResult> {
       logseq.Editor.appendBlockInPage(importPage, `TODO ${task.title}`))
     if (block) {
       const projectName = projectsById.get(task.projectId)?.name || ''
+      const logseqLink = buildLogseqLink(graphName, block.uuid)
+      const nextContent = contentWithLogseqLink(task.content, logseqLink)
+      await syncStep(`TickTick could not save the Logseq link for task "${task.title}"`, () =>
+        ticktick.updateTask(task.id, { content: nextContent, projectId: task.projectId }))
+      task.content = nextContent
       if (projectName) await setLocalListName(block, projectName)
       const dueMs = isoDueDateToMs(task.dueDate ?? null)
       if (isDbGraph && dueMs !== null) await setLocalScheduled(block, dueMs)
