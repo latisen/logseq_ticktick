@@ -138,16 +138,33 @@ function hasLogseqLink(content: string | undefined, link: string): boolean {
 
 async function getAllLocalTaskBlocks(): Promise<BlockEntity[]> {
   const isDbGraph = await logseq.App.checkCurrentIsDbGraph()
-  const query = isDbGraph
-    ? `[:find (pull ?block [*])
-        :where
-        [?block :block/tags ?tag]
-        [?tag :db/ident :logseq.class/Task]]`
-    : `[:find (pull ?block [*])
-        :where
-        [?block :block/content ?content]]`
-  const result = await logseq.DB.datascriptQuery<Array<[BlockEntity]>>(query)
-  return isDbGraph ? result.map(([block]) => block) : result.map(([block]) => block).filter(isTaskBlock)
+  if (!isDbGraph) {
+    const result = await logseq.DB.datascriptQuery<Array<[BlockEntity]>>(`
+      [:find (pull ?block [*])
+       :where [?block :block/content ?content]]
+    `)
+    return result.map(([block]) => block).filter(isTaskBlock)
+  }
+
+  const [classResults, statusResults] = await Promise.all([
+    logseq.DB.datascriptQuery<Array<[BlockEntity]>>(`
+      [:find (pull ?block [*])
+       :where
+       [?block :block/tags ?tag]
+       [?tag :db/ident :logseq.class/Task]]
+    `),
+    logseq.DB.datascriptQuery<Array<[BlockEntity]>>(`
+      [:find (pull ?block [*])
+       :where
+       [?block :logseq.property/status ?status]]
+    `),
+  ])
+
+  const blocksByUuid = new Map<string, BlockEntity>()
+  for (const [block] of [...classResults, ...statusResults]) {
+    if (isTaskBlock(block)) blocksByUuid.set(block.uuid, block)
+  }
+  return [...blocksByUuid.values()]
 }
 
 async function getCompletedDbTaskUuids(): Promise<Set<string>> {
