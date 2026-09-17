@@ -539,8 +539,11 @@ export async function runSync(): Promise<SyncResult> {
   }
 
   // New TickTick tasks cannot retain a Logseq location, so they are appended to one import page.
+  const mappedTaskIds = new Set(Object.values(syncRecords).map((record) => record.taskId))
   for (const task of remoteById.values()) {
-    if (localByTaskId.has(task.id)) continue
+    // A mapping is authoritative even when Logseq's DB query temporarily does
+    // not return the corresponding imported block.
+    if (localByTaskId.has(task.id) || mappedTaskIds.has(task.id)) continue
     const block = await syncStep(`Logseq could not import TickTick task "${task.title}" to page "${importPage}"`, () =>
       logseq.Editor.appendBlockInPage(importPage, `TODO ${task.title}`))
     if (block) {
@@ -554,6 +557,7 @@ export async function runSync(): Promise<SyncResult> {
       const dueMs = isoDueDateToMs(task.dueDate ?? null)
       if (isDbGraph && dueMs !== null) await setLocalScheduled(block, dueMs)
       syncRecords[block.uuid] = syncRecord(task, task.status === 2 ? 2 : 0, projectName)
+      mappedTaskIds.add(task.id)
       importedFromTickTick += 1
     }
   }
