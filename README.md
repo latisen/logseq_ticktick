@@ -13,7 +13,7 @@ Two-way sync between Logseq tasks and [TickTick](https://ticktick.com), built on
 - Editing a synced task title in either Logseq or TickTick updates the other side.
 - Moving a task to a different TickTick list, or editing its `ticktick-list` property in Logseq,
   moves the task on the other side too.
-- Editing a task's due date (DB graphs only, via the built-in `Deadline` property) pushes the change
+- Editing a task's due date (DB graphs only, via the built-in `Scheduled` property) pushes the change
   to TickTick; a due date change in TickTick updates the Logseq property.
 
 Sync happens automatically (interval + shortly after you edit the graph), or on demand via the
@@ -23,7 +23,7 @@ toolbar refresh button / command palette.
 the default TickTick project (or Inbox), unless the block already has a `ticktick-list` property naming
 an existing TickTick list. New remote tasks go to the configured import page because TickTick has no
 Logseq placement information. Priorities, descriptions, subtasks, deletes, and reopening completed
-tasks are not currently synced. Clearing a due date in Logseq does not clear it in TickTick. Due date
+tasks are not currently synced. Clearing a scheduled date in Logseq does not clear it in TickTick. Due date
 sync requires a Logseq **DB graph**. If the same title changes on both sides before a sync, Logseq wins.
 
 ## Setup

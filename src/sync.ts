@@ -199,7 +199,7 @@ async function repairLegacyDonePrefix(block: BlockEntity): Promise<boolean> {
 }
 
 // Due dates are only synced on DB graphs, which expose a built-in timestamp property.
-const DEADLINE_PROPERTY = ':logseq.property/deadline'
+const SCHEDULED_PROPERTY = ':logseq.property/scheduled'
 const LIST_PROPERTY = 'ticktick-list'
 
 function msToIsoDueDate(ms: number): string {
@@ -212,18 +212,18 @@ function isoDueDateToMs(iso?: string | null): number | null {
   return Number.isNaN(parsed) ? null : parsed
 }
 
-function getLocalDeadlineMs(block: BlockEntity): number | null {
-  const raw = block[DEADLINE_PROPERTY] ?? block['logseq.property/deadline'] ?? block.properties?.deadline
+function getLocalScheduledMs(block: BlockEntity): number | null {
+  const raw = block[SCHEDULED_PROPERTY] ?? block['logseq.property/scheduled'] ?? block.properties?.scheduled
   if (raw === null || raw === undefined) return null
   const value = raw instanceof Date ? raw.getTime() : Number(raw)
   return Number.isNaN(value) ? null : value
 }
 
-async function setLocalDeadline(block: BlockEntity, ms: number | null): Promise<void> {
+async function setLocalScheduled(block: BlockEntity, ms: number | null): Promise<void> {
   if (ms === null) {
-    await logseq.Editor.removeBlockProperty(block.uuid, DEADLINE_PROPERTY)
+    await logseq.Editor.removeBlockProperty(block.uuid, SCHEDULED_PROPERTY)
   } else {
-    await logseq.Editor.upsertBlockProperty(block.uuid, DEADLINE_PROPERTY, ms)
+    await logseq.Editor.upsertBlockProperty(block.uuid, SCHEDULED_PROPERTY, ms)
   }
 }
 
@@ -324,7 +324,7 @@ export async function runSync(): Promise<SyncResult> {
           projectName: projectsById.get(projectId)?.name || '',
           title: String(title || titleFromContent(blockText(block), block.marker)),
           status: isBlockCompleted(block, completedDbTaskUuids) ? 2 : 0,
-          dueDate: isDbGraph ? getLocalDeadlineMs(block) : null,
+          dueDate: isDbGraph ? getLocalScheduledMs(block) : null,
         }
         syncRecords[block.uuid] = record
         migratedMappings += 1
@@ -345,7 +345,7 @@ export async function runSync(): Promise<SyncResult> {
       ? [...projectsById.values()].find((p) => p.name.toLowerCase() === desiredListName.toLowerCase())
       : undefined
     const projectId = desiredProject?.id || settings.projectId
-    const localDueMs = isDbGraph ? getLocalDeadlineMs(block) : null
+    const localDueMs = isDbGraph ? getLocalScheduledMs(block) : null
 
     const task = await syncStep(
       `TickTick could not create task "${title}"`,
@@ -456,7 +456,7 @@ export async function runSync(): Promise<SyncResult> {
     // Due dates: only pushed to TickTick when set locally (clearing a remote due
     // date isn't supported yet). Remote due date changes, including clearing, sync back.
     if (isDbGraph) {
-      const localDueMs = getLocalDeadlineMs(block)
+      const localDueMs = getLocalScheduledMs(block)
       const storedDueMs = record.dueDate
       const remoteDueMs = isoDueDateToMs(remote.dueDate ?? null)
 
@@ -468,7 +468,7 @@ export async function runSync(): Promise<SyncResult> {
         dueDateUpdatedInTickTick += 1
       } else if (remoteDueMs !== storedDueMs && remoteDueMs !== localDueMs) {
         await syncStep(`Logseq could not update the due date for task "${taskLabel(block)}"`, () =>
-          setLocalDeadline(block, remoteDueMs))
+          setLocalScheduled(block, remoteDueMs))
         record.dueDate = remoteDueMs
         dueDateUpdatedInLogseq += 1
       }
@@ -494,7 +494,7 @@ export async function runSync(): Promise<SyncResult> {
       const projectName = projectsById.get(task.projectId)?.name || ''
       if (projectName) await setLocalListName(block, projectName)
       const dueMs = isoDueDateToMs(task.dueDate ?? null)
-      if (isDbGraph && dueMs !== null) await setLocalDeadline(block, dueMs)
+      if (isDbGraph && dueMs !== null) await setLocalScheduled(block, dueMs)
       syncRecords[block.uuid] = syncRecord(task, task.status === 2 ? 2 : 0, projectName)
       importedFromTickTick += 1
     }
